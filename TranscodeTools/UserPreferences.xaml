@@ -1,0 +1,198 @@
+<!-- ============================================================
+     UserPreferences.xaml
+     ------------------------------------------------------------
+     This is the User Preferences window. It lets the user set
+     the paths to all the external tools the application needs,
+     as well as default command-line option strings.
+
+     Layout: A ScrollViewer containing a grid of rows.
+     Each tool row has: Label | TextBox | [Where] [Browse]
+     Options rows have: Label | TextBox (full width)
+     ============================================================ -->
+<Window x:Class="TranscodeTools.UserPreferences"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="User Preferences"
+        Width="700" Height="620"
+        MinWidth="600" MinHeight="500"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="CanResize"
+        Background="{DynamicResource WindowBg}">
+
+    <Window.Resources>
+        <!-- Label style for the left-hand column -->
+        <Style x:Key="PrefLabel" TargetType="TextBlock">
+            <Setter Property="Foreground"           Value="{DynamicResource ForegroundColor}"/>
+            <Setter Property="FontSize"             Value="13"/>
+            <Setter Property="VerticalAlignment"    Value="Center"/>
+            <Setter Property="Margin"               Value="0,0,10,0"/>
+        </Style>
+
+        <!-- Section header style -->
+        <Style x:Key="SectionHeader" TargetType="TextBlock">
+            <Setter Property="Foreground"  Value="{DynamicResource SubtleForeground}"/>
+            <Setter Property="FontSize"    Value="11"/>
+            <Setter Property="FontWeight"  Value="SemiBold"/>
+            <Setter Property="Margin"      Value="0,12,0,6"/>
+        </Style>
+
+        <!-- Small button for Where / Browse -->
+        <Style x:Key="SmallButton" TargetType="Button" BasedOn="{StaticResource FlatButton}">
+            <Setter Property="Padding"  Value="8,4"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Margin"   Value="4,0,0,0"/>
+            <Setter Property="MinWidth" Value="60"/>
+        </Style>
+    </Window.Resources>
+
+    <DockPanel>
+
+        <!-- OK / Cancel button bar at the bottom -->
+        <Border DockPanel.Dock="Bottom"
+                Background="{DynamicResource SurfaceBg}"
+                BorderBrush="{DynamicResource SeparatorColor}"
+                BorderThickness="0,1,0,0"
+                Padding="12,10">
+            <StackPanel Orientation="Horizontal"
+                        HorizontalAlignment="Right">
+                <Button x:Name="BtnCancel"
+                        Content="Cancel"
+                        Style="{StaticResource FlatButton}"
+                        Margin="0,0,8,0"
+                        Width="80"
+                        Click="BtnCancel_Click"/>
+                <Button x:Name="BtnOK"
+                        Content="OK"
+                        Style="{StaticResource AccentButton}"
+                        Width="80"
+                        Click="BtnOK_Click"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Scrollable content area -->
+        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                      Padding="16,12,16,12">
+            <StackPanel>
+
+                <!-- ── TOOL PATHS section ─────────────────────── -->
+                <TextBlock Text="TOOL PATHS"
+                           Style="{StaticResource SectionHeader}"/>
+
+                <Border Background="{DynamicResource SurfaceBg}"
+                        BorderBrush="{DynamicResource BorderColor}"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Padding="12,8">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="130"/>  <!-- Label -->
+                            <ColumnDefinition Width="*"/>    <!-- TextBox -->
+                            <ColumnDefinition Width="Auto"/> <!-- Where button -->
+                            <ColumnDefinition Width="Auto"/> <!-- Browse button -->
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="36"/>
+                            <RowDefinition Height="36"/>
+                            <RowDefinition Height="36"/>
+                            <RowDefinition Height="36"/>
+                            <RowDefinition Height="36"/>
+                            <RowDefinition Height="36"/>
+                            <RowDefinition Height="36"/>
+                            <RowDefinition Height="36"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- MPV -->
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="MPV"                Style="{StaticResource PrefLabel}"/>
+                        <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TbxMPV"          VerticalContentAlignment="Center"/>
+                        <Button    Grid.Row="0" Grid.Column="2" Content="Where"           Style="{StaticResource SmallButton}" Click="WhereMPV_Click"/>
+                        <Button    Grid.Row="0" Grid.Column="3" Content="Browse"          Style="{StaticResource SmallButton}" Click="BrowseMPV_Click"/>
+
+                        <!-- SubtitleEdit -->
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Subtitle Edit"      Style="{StaticResource PrefLabel}"/>
+                        <TextBox   Grid.Row="1" Grid.Column="1" x:Name="TbxSubtitleEdit"  VerticalContentAlignment="Center"/>
+                        <Button    Grid.Row="1" Grid.Column="2" Content="Where"           Style="{StaticResource SmallButton}" Click="WhereSubtitleEdit_Click"/>
+                        <Button    Grid.Row="1" Grid.Column="3" Content="Browse"          Style="{StaticResource SmallButton}" Click="BrowseSubtitleEdit_Click"/>
+
+                        <!-- ffmpeg -->
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="ffmpeg"             Style="{StaticResource PrefLabel}"/>
+                        <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TbxFFmpeg"        VerticalContentAlignment="Center"/>
+                        <Button    Grid.Row="2" Grid.Column="2" Content="Where"           Style="{StaticResource SmallButton}" Click="WhereFFmpeg_Click"/>
+                        <Button    Grid.Row="2" Grid.Column="3" Content="Browse"          Style="{StaticResource SmallButton}" Click="BrowseFFmpeg_Click"/>
+
+                        <!-- ffprobe -->
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="ffprobe"            Style="{StaticResource PrefLabel}"/>
+                        <TextBox   Grid.Row="3" Grid.Column="1" x:Name="TbxFFprobe"       VerticalContentAlignment="Center"/>
+                        <Button    Grid.Row="3" Grid.Column="2" Content="Where"           Style="{StaticResource SmallButton}" Click="WhereFFprobe_Click"/>
+                        <Button    Grid.Row="3" Grid.Column="3" Content="Browse"          Style="{StaticResource SmallButton}" Click="BrowseFFprobe_Click"/>
+
+                        <!-- other-transcode -->
+                        <TextBlock Grid.Row="4" Grid.Column="0" Text="other-transcode"    Style="{StaticResource PrefLabel}"/>
+                        <TextBox   Grid.Row="4" Grid.Column="1" x:Name="TbxOtherTranscode" VerticalContentAlignment="Center"/>
+                        <Button    Grid.Row="4" Grid.Column="2" Content="Where"           Style="{StaticResource SmallButton}" Click="WhereOtherTranscode_Click"/>
+                        <Button    Grid.Row="4" Grid.Column="3" Content="Browse"          Style="{StaticResource SmallButton}" Click="BrowseOtherTranscode_Click"/>
+
+                        <!-- MKVPropEdit -->
+                        <TextBlock Grid.Row="5" Grid.Column="0" Text="MKVPropEdit"        Style="{StaticResource PrefLabel}"/>
+                        <TextBox   Grid.Row="5" Grid.Column="1" x:Name="TbxMKVPropEdit"   VerticalContentAlignment="Center"/>
+                        <Button    Grid.Row="5" Grid.Column="2" Content="Where"           Style="{StaticResource SmallButton}" Click="WhereMKVPropEdit_Click"/>
+                        <Button    Grid.Row="5" Grid.Column="3" Content="Browse"          Style="{StaticResource SmallButton}" Click="BrowseMKVPropEdit_Click"/>
+
+                        <!-- MKVMerge -->
+                        <TextBlock Grid.Row="6" Grid.Column="0" Text="MKVMerge"           Style="{StaticResource PrefLabel}"/>
+                        <TextBox   Grid.Row="6" Grid.Column="1" x:Name="TbxMKVMerge"      VerticalContentAlignment="Center"/>
+                        <Button    Grid.Row="6" Grid.Column="2" Content="Where"           Style="{StaticResource SmallButton}" Click="WhereMKVMerge_Click"/>
+                        <Button    Grid.Row="6" Grid.Column="3" Content="Browse"          Style="{StaticResource SmallButton}" Click="BrowseMKVMerge_Click"/>
+
+                        <!-- Ruby -->
+                        <TextBlock Grid.Row="7" Grid.Column="0" Text="Ruby"               Style="{StaticResource PrefLabel}"/>
+                        <TextBox   Grid.Row="7" Grid.Column="1" x:Name="TbxRuby"          VerticalContentAlignment="Center"/>
+                        <Button    Grid.Row="7" Grid.Column="2" Content="Where"           Style="{StaticResource SmallButton}" Click="WhereRuby_Click"/>
+                        <Button    Grid.Row="7" Grid.Column="3" Content="Browse"          Style="{StaticResource SmallButton}" Click="BrowseRuby_Click"/>
+
+                    </Grid>
+                </Border>
+
+                <!-- ── OPTIONS section ────────────────────────── -->
+                <TextBlock Text="DEFAULT OPTIONS"
+                           Style="{StaticResource SectionHeader}"/>
+
+                <Border Background="{DynamicResource SurfaceBg}"
+                        BorderBrush="{DynamicResource BorderColor}"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Padding="12,8">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="180"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="36"/>
+                            <RowDefinition Height="36"/>
+                            <RowDefinition Height="36"/>
+                            <RowDefinition Height="36"/>
+                            <RowDefinition Height="36"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="other-transcode Defaults" Style="{StaticResource PrefLabel}"/>
+                        <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TbxOtherTranscodeDefaults" VerticalContentAlignment="Center"/>
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="other-transcode Options"  Style="{StaticResource PrefLabel}"/>
+                        <TextBox   Grid.Row="1" Grid.Column="1" x:Name="TbxOtherTranscodeOptions" VerticalContentAlignment="Center"/>
+
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="MKVMerge Defaults"        Style="{StaticResource PrefLabel}"/>
+                        <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TbxMKVMergeDefaults"    VerticalContentAlignment="Center"/>
+
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="MKVMerge Options"         Style="{StaticResource PrefLabel}"/>
+                        <TextBox   Grid.Row="3" Grid.Column="1" x:Name="TbxMKVMergeOptions"     VerticalContentAlignment="Center"/>
+
+                        <TextBlock Grid.Row="4" Grid.Column="0" Text="RoboCopy Defaults"        Style="{StaticResource PrefLabel}"/>
+                        <TextBox   Grid.Row="4" Grid.Column="1" x:Name="TbxRoboCopyDefaults"    VerticalContentAlignment="Center"/>
+
+                    </Grid>
+                </Border>
+
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</Window>
