@@ -1,339 +1,584 @@
 // ============================================================
 // MainWindow.xaml.cs
-// ------------------------------------------------------------
-// This is the CODE-BEHIND for the main window.
-// It pairs with MainWindow.xaml — the XAML defines WHAT the
-// UI looks like, and this file defines HOW it behaves.
-//
-// Think of it like a VB.NET Form: the designer sets up the
-// controls, and the .vb file handles the events and logic.
 // ============================================================
 
-using System.Collections.ObjectModel; // For ObservableCollection
-using System.IO;                       // For Directory, Path, File
-using System.Windows;                  // For Window, MessageBox, Visibility
-using System.Windows.Controls;        // For ListBox, SelectionChangedEventArgs
-using Microsoft.Win32;                 // For OpenFolderDialog
+using System.Collections.ObjectModel;
+using System.IO;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using Microsoft.Win32;
 
 namespace TranscodeTools;
 
-// "partial" because the other half of this class is auto-generated
-// from MainWindow.xaml by the XAML compiler.
 public partial class MainWindow : Window
 {
-    // ── Observable Collections ───────────────────────────────────────
-    //
-    // ObservableCollection<T> is like a List in VB.NET, but it
-    // automatically notifies the UI when items are added or removed.
-    // The <T> is a GENERIC TYPE PARAMETER — T is replaced with the
-    // actual type you want to store, e.g. ObservableCollection<RemuxVideoTrack>
-    // means "a collection of RemuxVideoTrack objects".
-    //
-    // "public ... { get; } = new();" declares a property with only a getter
-    // (read-only from outside), initialised immediately with a new instance.
-    // new() is shorthand for new ObservableCollection<RemuxVideoTrack>() —
-    // C# can infer the type from the property declaration.
-
-    // --- Remux mode collections ---
+    // ── Track collections ────────────────────────────────────────────
     public ObservableCollection<RemuxVideoTrack>    RemuxVideoTracks    { get; } = new();
     public ObservableCollection<RemuxAudioTrack>    RemuxAudioTracks    { get; } = new();
     public ObservableCollection<RemuxSubtitleTrack> RemuxSubtitleTracks { get; } = new();
-
-    // --- Transcode mode collections ---
     public ObservableCollection<TranscodeVideoTrack>    TranscodeVideoTracks    { get; } = new();
     public ObservableCollection<TranscodeAudioTrack>    TranscodeAudioTracks    { get; } = new();
     public ObservableCollection<TranscodeSubtitleTrack> TranscodeSubtitleTracks { get; } = new();
 
-    // Private field to track which mode we're in.
-    // The underscore prefix is a C# convention for private instance fields.
-    // In VB.NET: Private _isTranscodeMode As Boolean = False
+    // ── File browser state ───────────────────────────────────────────
+    // The currently selected input folder path, e.g. "H:\Video"
+    private string _inputDirectory = "";
+
+    // The currently selected movie subfolder name, e.g. "Casino Royale (2006)"
+    private string _selectedMovieFolder = "";
+
+    // Drag-and-drop state for the audio and subtitle ListViews
+    // Stores the index of the row being dragged
+    private int _dragFromIndex = -1;
+
+    // Which list is being dragged (so MouseMove knows which list to act on)
+    private ListView? _dragSourceList;
+
     private bool _isTranscodeMode = false;
 
+    // Known extras category suffixes — split on the LAST dash in the filename,
+    // then check if what follows is one of these known types.
+    // This fixes the original bug where filenames containing dashes
+    // (e.g. "Ian Fleming - Secret Road To Paradise-featurette") were
+    // misidentified because the code split on the first dash instead of the last.
+    private static readonly HashSet<string> KnownCategories = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // HashSet<string> gives O(1) lookup — faster than checking a list one by one.
+        // StringComparer.OrdinalIgnoreCase makes the comparison case-insensitive.
+        "featurette", "trailer", "behindthescenes", "deleted",
+        "interview", "other", "scene", "short"
+    };
 
     // ── Constructor ──────────────────────────────────────────────────
-    //
-    // The constructor runs once when the window is created.
-    // It has the same name as the class — this is a C# rule.
-    // In VB.NET this would be: Public Sub New()
     public MainWindow()
     {
-        // InitializeComponent() reads the XAML and builds all the controls.
-        // You must always call this first — it's the equivalent of the
-        // auto-generated InitializeComponent() call in a VB.NET Form.
         InitializeComponent();
 
-        // Connect each ListView to its data collection.
-        // ItemsSource tells WPF "show the items from this collection in this list."
-        // When the collection changes, the list updates automatically.
         RemuxVideoList.ItemsSource        = RemuxVideoTracks;
         RemuxAudioList.ItemsSource        = RemuxAudioTracks;
         RemuxSubtitleList.ItemsSource     = RemuxSubtitleTracks;
         TranscodeVideoList.ItemsSource    = TranscodeVideoTracks;
         TranscodeAudioList.ItemsSource    = TranscodeAudioTracks;
         TranscodeSubtitleList.ItemsSource = TranscodeSubtitleTracks;
+    }
 
-        // Fill the lists with sample data so the UI isn't empty on first launch.
-        // Remove this call (or clear the method) when you hook up real MediaInfo data.
-        LoadSampleData();
-
-        // Check all tool paths are configured — prompts user to set them if not.
+    private void MainWindow_Loaded(object sender, RoutedEventArgs e)
+    {
         ValidatePathsOnStartup();
     }
 
-
-    // ── Mode Switch ──────────────────────────────────────────────────
-    //
-    // This event handler fires when either the Remux or Transcode
-    // radio button is checked. Both radio buttons point to this same handler
-    // (set in the XAML with Checked="ModeChanged").
-
+    // ── Mode switch ──────────────────────────────────────────────────
     private void ModeChanged(object sender, RoutedEventArgs e)
     {
-        // IMPORTANT: ModeChanged fires during InitializeComponent() when the
-        // radio buttons are first created. At that point TranscodeRadio may
-        // not exist yet, causing a null reference error.
-        // This guard returns early if the control isn't ready yet,
-        // leaving the XAML default (Remux visible) in place.
-        // "is null" is the modern C# way to check for null.
-        // In VB.NET: If TranscodeRadio Is Nothing Then Return
         if (TranscodeRadio is null) return;
-
-        // IsChecked returns a bool? (nullable bool) in WPF because a RadioButton
-        // can technically be in an indeterminate state. Comparing == true safely
-        // handles the case where IsChecked is null.
         _isTranscodeMode = TranscodeRadio.IsChecked == true;
 
-        // Show the correct panel and hide the other.
-        // The ternary operator (?:) is used here:
-        //   condition ? valueIfTrue : valueIfFalse
         RemuxPanel.Visibility     = _isTranscodeMode ? Visibility.Collapsed : Visibility.Visible;
         TranscodePanel.Visibility = _isTranscodeMode ? Visibility.Visible   : Visibility.Collapsed;
 
-        // Build an array of the three buttons that are Remux-only.
-        // new[] { ... } creates an array and infers the type automatically.
-        // In VB.NET: Dim btnRemux() As Button = { OpenInMPVBtn, ... }
         var btnRemux = new[] { OpenInMPVBtn, OpenInSubtitleEditBtn, OpenFolderBtn };
-
-        // In Transcode mode: hide remux buttons, show Save Transcode button.
-        // In Remux mode: show remux buttons, hide Save Transcode button.
         if (SaveTranscodeBtn == null) return;
 
-        SaveTranscodeBtn.Visibility = _isTranscodeMode ? Visibility.Visible : Visibility.Collapsed;
+        SaveRemuxBtn.Visibility     = _isTranscodeMode ? Visibility.Collapsed : Visibility.Visible;
+        SaveTranscodeBtn.Visibility = _isTranscodeMode ? Visibility.Visible   : Visibility.Collapsed;
 
-        // Loop through the remux-only buttons and toggle their visibility.
-        // "foreach" in C# is the same as "For Each" in VB.NET.
         foreach (var btn in btnRemux)
             if (btn != null)
                 btn.Visibility = _isTranscodeMode ? Visibility.Collapsed : Visibility.Visible;
+
+        // Full reset on mode switch — same behaviour as the original app.
+        // The input/output directories will differ between Remux and Transcode
+        // so everything needs to be cleared for a fresh start.
+        _inputDirectory      = "";
+        _selectedMovieFolder = "";
+        InputDirectoryBox.Text  = "";
+        OutputDirectoryBox.Text = "";
+        FolderList.Items.Clear();
+        FileTree.Items.Clear();
+        ClearTrackTables();
+        HideSelectedFileBar();
     }
 
-
-    // ── Directory Selection ──────────────────────────────────────────
-
+    // ── Directory selection ──────────────────────────────────────────
     private void OpenInputDirectory_Click(object sender, RoutedEventArgs e)
     {
-        // BrowseFolder returns null if the user cancelled the dialog.
-        // The "var" keyword lets C# infer the type — here it infers string?
         var path = BrowseFolder("Select Input Directory");
-
-        // "return" with no value exits the method early — same as Exit Sub in VB.NET
         if (path == null) return;
 
+        _inputDirectory = path;
         InputDirectoryBox.Text = path;
-        LoadFilesFromDirectory(path, InputFileList);
+        LoadMovieFolders(path);
+
+        // Clear the right panel and tracks when a new input is chosen
+        FileTree.Items.Clear();
+        ClearTrackTables();
+        HideSelectedFileBar();
     }
 
     private void OpenOutputDirectory_Click(object sender, RoutedEventArgs e)
     {
         var path = BrowseFolder("Select Output Directory");
         if (path == null) return;
-
         OutputDirectoryBox.Text = path;
-        LoadFilesFromDirectory(path, OutputFileList);
     }
 
-    // "private static" — static means this method doesn't need access to
-    // any instance data (no "this"), so it belongs to the class itself.
-    // The string? return type means it can return a string OR null.
-    // In VB.NET: Private Shared Function BrowseFolder(title As String) As String
     private static string? BrowseFolder(string title)
     {
-        // OpenFolderDialog is a WPF built-in (available in .NET 8+).
-        // The { Title = title } syntax is an OBJECT INITIALISER —
-        // a shorthand for creating an object and setting its properties.
-        // In VB.NET: Dim dialog As New OpenFolderDialog() : dialog.Title = title
         var dialog = new OpenFolderDialog { Title = title };
-
-        // ShowDialog() returns a nullable bool (bool?). We compare == true
-        // for the same reason as IsChecked above.
-        // The ternary operator returns the folder path or null.
         return dialog.ShowDialog() == true ? dialog.FolderName : null;
     }
 
-    private static void LoadFilesFromDirectory(string path, ListBox list)
+    // ── Load movie folders into the left list ────────────────────────
+    // Scans the input directory for subfolders, skipping "Remux" and
+    // "Transcode" which are used for settings files, not source material.
+    private void LoadMovieFolders(string rootPath)
     {
-        list.Items.Clear();
+        FolderList.Items.Clear();
 
-        // try/catch in C# is the same as Try/Catch in VB.NET.
         try
         {
-            // LINQ chain — each method transforms the data one step at a time.
-            // This is similar to using multiple VB.NET LINQ extension methods.
-            var files = Directory.GetFiles(path)   // Get all file paths in the folder
-                .Select(Path.GetFileName)           // Extract just the filename from each path
-                .Where(f => f != null)              // Filter out any null results
-                .OrderBy(f => f);                   // Sort alphabetically
+            var folders = Directory.GetDirectories(rootPath)
+                .Select(Path.GetFileName)
+                .Where(name => name != null &&
+                               !name.Equals("Remux",     StringComparison.OrdinalIgnoreCase) &&
+                               !name.Equals("Transcode", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(name => name);
 
-            // foreach loop — same as For Each in VB.NET
-            foreach (var f in files)
-                list.Items.Add(f);
+            foreach (var folder in folders)
+                FolderList.Items.Add(folder);
         }
         catch (Exception ex)
         {
-            // $"..." is string interpolation — same as $"..." in modern VB.NET.
-            // \n is a newline character (in VB.NET you'd use vbNewLine or Environment.NewLine)
             MessageBox.Show($"Could not read directory:\n{ex.Message}", "Error",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 
-
-    // ── File Selection → Populate Tracks ────────────────────────────
-
-    private void InputFileList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    // ── Folder selected → populate the TreeView ──────────────────────
+    private void FolderList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        // "is not string fileName" is a PATTERN MATCH with negation.
-        // It checks if SelectedItem is NOT a string, and returns early if so.
-        // This also handles the null case. In VB.NET:
-        //   If Not TypeOf InputFileList.SelectedItem Is String Then Return
-        //   Dim fileName As String = CStr(InputFileList.SelectedItem)
-        if (InputFileList.SelectedItem is not string fileName) return;
+        if (FolderList.SelectedItem is not string folderName) return;
 
-        // ToLowerInvariant() converts to lowercase using culture-invariant rules
-        // (safe for file extensions regardless of the user's language settings)
-        string ext = Path.GetExtension(fileName).ToLowerInvariant();
-        PopulateTracksForFile(fileName, ext);
+        _selectedMovieFolder = folderName;
+        FileTree.Items.Clear();
+        ClearTrackTables();
+        HideSelectedFileBar();
+
+        var folderPath = Path.Combine(_inputDirectory, folderName);
+
+        try
+        {
+            // Get all .mkv files in the folder, sorted alphabetically
+            var files = Directory.GetFiles(folderPath, "*.mkv")
+                .Select(Path.GetFileName)
+                .Where(f => f != null)
+                .OrderBy(f => f)
+                .ToList();
+
+            // Determine the mode string for checking settings files
+            var modeFolder = _isTranscodeMode ? "Transcode" : "Remux";
+
+            foreach (var fileName in files)
+            {
+                if (fileName == null) continue;
+
+                // Strip the .mkv extension for display and analysis
+                // Path.GetFileNameWithoutExtension handles this cleanly
+                var nameNoExt = Path.GetFileNameWithoutExtension(fileName);
+
+                // Determine the category by splitting on the LAST dash.
+                // This fixes the original bug — "Ian Fleming - Secret Road-featurette"
+                // was broken because the old code split on the first dash.
+                //
+                // LastIndexOf returns the position of the last '-' character.
+                // If no dash exists, it returns -1.
+                var lastDash = nameNoExt.LastIndexOf('-');
+
+                string? category = null;
+                string displayName = nameNoExt;
+
+                if (lastDash > 0)
+                {
+                    // Substring(lastDash + 1) gets everything after the last dash
+                    var suffix = nameNoExt.Substring(lastDash + 1);
+
+                    if (KnownCategories.Contains(suffix))
+                    {
+                        // It's an extra — suffix is the category, display name is everything before the dash
+                        category    = suffix.ToLowerInvariant();
+                        displayName = nameNoExt.Substring(0, lastDash);
+                    }
+                    // If suffix is not a known category, treat the whole name as the display name
+                    // (e.g. "Ian Fleming - Secret Road To Paradise" with no type suffix)
+                }
+
+                // Check if a settings file already exists for this file
+                var settingsPath = Path.Combine(_inputDirectory, modeFolder, folderName,
+                    nameNoExt + ".txt");
+                var hasSettings = File.Exists(settingsPath);
+
+                var leaf = new FileLeafNode
+                {
+                    DisplayName = displayName,
+                    FileName    = fileName,
+                    GroupKey    = category,
+                    // Green background if settings exist, transparent if not
+                    Background  = hasSettings
+                        ? System.Windows.Media.Brushes.Green
+                        : System.Windows.Media.Brushes.Transparent
+                };
+
+                if (category == null)
+                {
+                    // Root-level item — plain movie file, no category
+                    // Insert at position 0 so the main movie appears at the top,
+                    // same behaviour as the original app
+                    FileTree.Items.Insert(0, leaf);
+                }
+                else
+                {
+                    // Find or create the group node for this category
+                    var group = FindOrCreateGroup(category);
+                    group.Children.Add(leaf);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Could not read folder:\n{ex.Message}", "Error",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
-    private void PopulateTracksForFile(string fileName, string ext)
+    // Finds an existing group node in the TreeView by category key,
+    // or creates a new one if it doesn't exist yet.
+    // e.g. FindOrCreateGroup("deleted") returns the "Deleted" group node.
+    private FileGroupNode FindOrCreateGroup(string categoryKey)
     {
-        // Clear all six collections before loading new data.
-        // This ensures stale data from a previous selection is removed.
+        // Search existing top-level items for a matching group node
+        foreach (var item in FileTree.Items)
+        {
+            // "is FileGroupNode g" — pattern match that also assigns to g
+            // In VB.NET: If TypeOf item Is FileGroupNode Then Dim g = CType(item, FileGroupNode)
+            if (item is FileGroupNode g && g.CategoryKey == categoryKey)
+                return g;
+        }
+
+        // Not found — create it with a capitalised display name
+        // e.g. "deleted" → "Deleted"
+        // char.ToUpper converts first char, the rest stays the same via Substring(1)
+        var displayName = char.ToUpper(categoryKey[0]) + categoryKey.Substring(1);
+
+        var newGroup = new FileGroupNode
+        {
+            DisplayName = displayName,
+            CategoryKey = categoryKey
+        };
+
+        FileTree.Items.Add(newGroup);
+        return newGroup;
+    }
+
+    // ── File selected in TreeView → populate tracks ──────────────────
+    private void FileTree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
+    {
+        // If a GROUP node was clicked, expand it and select its first child.
+        // This way the user never needs to click twice — once to expand,
+        // once to select a file.
+        if (e.NewValue is FileGroupNode group)
+        {
+            if (group.Children.Count == 0) return;
+
+            // Find the TreeViewItem container for this group node.
+            // In WPF, the visual TreeViewItem is separate from the data object
+            // (FileGroupNode). ItemContainerGenerator bridges the two.
+            // In VB.NET terms: it's like finding the TreeNode that wraps our data object.
+            var groupContainer = FileTree.ItemContainerGenerator
+                .ContainerFromItem(group) as TreeViewItem;
+
+            if (groupContainer == null) return;
+
+            // Expand the group so its children are visible
+            groupContainer.IsExpanded = true;
+
+            // Now select the first child leaf.
+            // We must call UpdateLayout() first because the child TreeViewItem
+            // containers don't exist in the visual tree until after expansion
+            // is rendered. Without this, ContainerFromItem returns null.
+            groupContainer.UpdateLayout();
+
+            var firstChild = group.Children[0];
+            var childContainer = groupContainer.ItemContainerGenerator
+                .ContainerFromItem(firstChild) as TreeViewItem;
+
+            if (childContainer != null)
+                childContainer.IsSelected = true;
+
+            // The IsSelected = true above will fire SelectedItemChanged again
+            // with the leaf node, which will populate the tracks.
+            return;
+        }
+
+        // Only respond to leaf nodes (actual files)
+        if (e.NewValue is not FileLeafNode leaf) return;
+
+        var fullPath = Path.Combine(_inputDirectory, _selectedMovieFolder, leaf.FileName);
+        ShowSelectedFileBar(Path.GetFileNameWithoutExtension(leaf.FileName));
+
+        // TODO (Step 4): Replace this with a real ffprobe call
+        PopulateTracksForFile(fullPath);
+    }
+
+    // Shows the selected file bar with the given filename
+    private void ShowSelectedFileBar(string fileNameNoExt)
+    {
+        SelectedFileLabel.Text    = $"{fileNameNoExt} Details:";
+        SelectedFileBar.Visibility = Visibility.Visible;
+    }
+
+    private void HideSelectedFileBar()
+    {
+        SelectedFileBar.Visibility = Visibility.Collapsed;
+        SelectedFileLabel.Text     = "";
+    }
+
+    // ── Track population (placeholder until Step 4 ffprobe) ─────────
+    private void PopulateTracksForFile(string fullPath)
+    {
+        ClearTrackTables();
+
+        // Placeholder data — will be replaced with real ffprobe output in Step 4
+        RemuxVideoTracks.Add(new RemuxVideoTrack
+        {
+            OriginalTrackIndex = 0,
+            VideoFormat = "h264",
+            Resolution  = "1080p",
+            Fps         = "24000/1001",
+            IsDefault   = true
+        });
+
+        RemuxAudioTracks.Add(new RemuxAudioTrack
+        {
+            OriginalTrackIndex = 1,
+            AudioFormat = "dts (DTS-HD MA)",
+            Width       = "5.1(side)",
+            BitRate     = "3886",
+            Language    = "eng",
+            Title       = "Surround 5.1",
+            IsDefault   = true,
+            IsSelected  = true
+        });
+
+        RemuxSubtitleTracks.Add(new RemuxSubtitleTrack
+        {
+            OriginalTrackIndex = 2,
+            SubtitleFormat = "hdmv_pgs_subtitle",
+            Language       = "eng",
+            FrameCount     = "1840",
+            IsSelected     = true
+        });
+
+        RemuxSubtitleTracks.Add(new RemuxSubtitleTrack
+        {
+            OriginalTrackIndex = 3,
+            SubtitleFormat = "hdmv_pgs_subtitle",
+            Language       = "fra",
+            FrameCount     = "10",
+            IsDefault      = true,
+            IsSelected     = true
+        });
+
+        TranscodeVideoTracks.Add(new TranscodeVideoTrack
+        {
+            OriginalTrackIndex = 0,
+            TrackInfo    = "Video: h264 1080p @ 24000/1001",
+            Resolution   = "1080p",
+            OutputFormat = "hevc",
+            FrameRate    = "24000/1001"
+        });
+
+        TranscodeAudioTracks.Add(new TranscodeAudioTrack
+        {
+            OriginalTrackIndex = 1,
+            TrackInfo = "Audio: dts (DTS-HD MA) 5.1 3886Kbps [eng]",
+            Format    = "dts",
+            Width     = "5.1(side)",
+            BitRate   = "3886"
+        });
+
+        TranscodeSubtitleTracks.Add(new TranscodeSubtitleTrack
+        {
+            OriginalTrackIndex = 2,
+            TrackInfo = "Subtitle: hdmv_pgs_subtitle [eng]"
+        });
+    }
+
+    private void ClearTrackTables()
+    {
         RemuxVideoTracks.Clear();
         RemuxAudioTracks.Clear();
         RemuxSubtitleTracks.Clear();
         TranscodeVideoTracks.Clear();
         TranscodeAudioTracks.Clear();
         TranscodeSubtitleTracks.Clear();
-
-        // Add placeholder track data. In a real application you would call
-        // MediaInfo.dll or run "ffprobe -v quiet -print_format json -show_streams"
-        // and parse the JSON output to populate these tracks automatically.
-
-        // OBJECT INITIALISER syntax — sets multiple properties in one block.
-        // In VB.NET:
-        //   Dim t As New RemuxVideoTrack()
-        //   t.VideoFormat = "H.264 / AVC"
-        //   ...
-        //   RemuxVideoTracks.Add(t)
-        RemuxVideoTracks.Add(new RemuxVideoTrack
-        {
-            VideoFormat = "H.264 / AVC",
-            Resolution  = "1920x1080",
-            Fps         = "23.976",
-            IsDefault   = true
-        });
-
-        RemuxAudioTracks.Add(new RemuxAudioTrack
-        {
-            AudioFormat = "AAC",
-            Width       = "2ch",
-            BitRate     = "192",
-            Language    = "eng",
-            Title       = "English",
-            IsDefault   = true,
-            TrackId     = "2"
-        });
-
-        RemuxSubtitleTracks.Add(new RemuxSubtitleTrack
-        {
-            SubtitleFormat = "ASS",
-            Language       = "eng",
-            FrameCount     = "842",
-            Title          = "English",
-            TrackId        = "3"
-        });
-
-        // $ before a string means STRING INTERPOLATION — variables inside {}
-        // are evaluated and inserted into the string. Same as $"..." in VB.NET.
-        TranscodeVideoTracks.Add(new TranscodeVideoTrack
-        {
-            TrackInfo    = $"Video: H.264 1920x1080 @ 23.976fps",
-            Resolution   = "1920x1080",
-            OutputFormat = "H.265 / HEVC",
-            FrameRate    = "23.976"
-        });
-
-        TranscodeAudioTracks.Add(new TranscodeAudioTrack
-        {
-            TrackInfo = "Audio: AAC 2ch 192Kbps [English]",
-            Format    = "AAC",
-            Width     = "2ch",
-            BitRate   = "192"
-        });
-
-        TranscodeSubtitleTracks.Add(new TranscodeSubtitleTrack
-        {
-            TrackInfo = "Subtitle: ASS [English]",
-            IsDefault = true
-        });
     }
 
+    // ── Drag and drop for Audio ListView ────────────────────────────
+    // These three handlers work together:
+    // 1. PreviewMouseLeftButtonDown — record which row the drag started on
+    // 2. PreviewMouseMove — once mouse moves far enough, start the drag
+    // 3. Drop — reorder the collection when the row is dropped
 
-    // ── Bottom Button Handlers ───────────────────────────────────────
+    private void AudioList_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        => StartDragCapture(RemuxAudioList, e);
 
+    private void AudioList_PreviewMouseMove(object sender, MouseEventArgs e)
+        => HandleDragMove(RemuxAudioList, e);
+
+    private void AudioList_Drop(object sender, DragEventArgs e)
+        => HandleDrop(RemuxAudioList, RemuxAudioTracks, e);
+
+    // ── Drag and drop for Subtitle ListView ─────────────────────────
+    private void SubtitleList_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        => StartDragCapture(RemuxSubtitleList, e);
+
+    private void SubtitleList_PreviewMouseMove(object sender, MouseEventArgs e)
+        => HandleDragMove(RemuxSubtitleList, e);
+
+    private void SubtitleList_Drop(object sender, DragEventArgs e)
+        => HandleDrop(RemuxSubtitleList, RemuxSubtitleTracks, e);
+
+    // ── Drag and drop implementation ─────────────────────────────────
+
+    // Records the row index that the mouse button went down on.
+    // Uses HitTest to find which item is under the mouse pointer.
+    private void StartDragCapture(ListView list, MouseButtonEventArgs e)
+    {
+        // VisualTreeHelper.HitTest finds whatever visual element is under
+        // the mouse. We walk up the visual tree to find the ListViewItem.
+        var hit = list.InputHitTest(e.GetPosition(list)) as DependencyObject;
+        var item = FindAncestor<ListViewItem>(hit);
+        if (item == null) return;
+
+        _dragFromIndex  = list.Items.IndexOf(item.DataContext);
+        _dragSourceList = list;
+    }
+
+    // Starts the actual drag operation once the mouse has moved more than
+    // the system-defined minimum drag distance.
+    private void HandleDragMove(ListView list, MouseEventArgs e)
+    {
+        if (e.LeftButton != MouseButtonState.Pressed) return;
+        if (_dragFromIndex < 0 || _dragSourceList != list) return;
+
+        // SystemParameters.MinimumHorizontalDragDistance / MinimumVerticalDragDistance
+        // are the minimum distances the mouse must move before a drag is initiated.
+        // This prevents accidental drags when the user just clicks.
+        var pos = e.GetPosition(list);
+        if (Math.Abs(pos.X) < SystemParameters.MinimumHorizontalDragDistance &&
+            Math.Abs(pos.Y) < SystemParameters.MinimumVerticalDragDistance) return;
+
+        // DoDragDrop initiates the drag. We pass the index as the data payload.
+        // DragDropEffects.Move tells Windows this is a move, not a copy.
+        DragDrop.DoDragDrop(list, _dragFromIndex, DragDropEffects.Move);
+    }
+
+    // Handles the drop by moving the item in the underlying collection.
+    // Because the collection is an ObservableCollection, the ListView
+    // automatically updates to reflect the new order.
+    //
+    // The generic <T> parameter means this one method works for both
+    // audio tracks and subtitle tracks without duplicating code.
+    // In VB.NET you would need a separate Sub for each type.
+    private void HandleDrop<T>(ListView list, ObservableCollection<T> collection, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(typeof(int))) return;
+
+        var fromIndex = (int)e.Data.GetData(typeof(int));
+
+        // Find which row the item was dropped onto using HitTest
+        var hit  = list.InputHitTest(e.GetPosition(list)) as DependencyObject;
+        var item = FindAncestor<ListViewItem>(hit);
+
+        int toIndex;
+        if (item != null)
+        {
+            toIndex = list.Items.IndexOf(item.DataContext);
+        }
+        else
+        {
+            // Dropped below all rows — move to end of list
+            toIndex = collection.Count - 1;
+        }
+
+        if (fromIndex < 0 || toIndex < 0 || fromIndex == toIndex) return;
+
+        // Move the item in the collection.
+        // ObservableCollection.Move(oldIndex, newIndex) does exactly what we need.
+        // The UI updates automatically because ObservableCollection fires
+        // a CollectionChanged event that the ListView is bound to.
+        collection.Move(fromIndex, toIndex);
+
+        _dragFromIndex  = -1;
+        _dragSourceList = null;
+    }
+
+    // Walks up the WPF visual tree to find the nearest ancestor of type T.
+    // Used to find the ListViewItem that contains the element the mouse hit.
+    // "where T : DependencyObject" constrains T to WPF visual elements.
+    private static T? FindAncestor<T>(DependencyObject? element) where T : DependencyObject
+    {
+        while (element != null)
+        {
+            if (element is T target) return target;
+            // VisualTreeHelper.GetParent walks one level up the visual tree
+            element = System.Windows.Media.VisualTreeHelper.GetParent(element);
+        }
+        return null;
+    }
+
+    // ── Bottom button handlers ───────────────────────────────────────
     private void OpenInMPV_Click(object sender, RoutedEventArgs e)
     {
-        // Pattern match — only continues if SelectedItem is a string
-        if (InputFileList.SelectedItem is not string file) return;
-
-        // Path.Combine safely joins folder + filename with the correct separator.
-        // Equivalent to IO.Path.Combine in VB.NET.
-        var fullPath = Path.Combine(InputDirectoryBox.Text, file);
-        TryLaunch("mpv", fullPath);
+        var path = GetSelectedFilePath();
+        if (path == null) return;
+        TryLaunch(AppSettings.Instance.MPV_Path, path);
     }
 
     private void OpenInSubtitleEdit_Click(object sender, RoutedEventArgs e)
     {
-        if (InputFileList.SelectedItem is not string file) return;
-        var fullPath = Path.Combine(InputDirectoryBox.Text, file);
-        TryLaunch("SubtitleEdit", fullPath);
+        var path = GetSelectedFilePath();
+        if (path == null) return;
+        TryLaunch(AppSettings.Instance.SubtitleEdit_Path, path);
     }
 
     private void OpenFolderInExplorer_Click(object sender, RoutedEventArgs e)
     {
-        var path = InputDirectoryBox.Text;
-
-        // IsNullOrWhiteSpace checks for null, empty string, or just spaces.
-        // Equivalent to String.IsNullOrWhiteSpace in VB.NET.
-        if (string.IsNullOrWhiteSpace(path)) return;
-
-        System.Diagnostics.Process.Start("explorer.exe", path);
+        if (string.IsNullOrWhiteSpace(_selectedMovieFolder)) return;
+        var folderPath = Path.Combine(_inputDirectory, _selectedMovieFolder);
+        System.Diagnostics.Process.Start("explorer.exe", folderPath);
     }
 
     private void SaveSettings_Click(object sender, RoutedEventArgs e)
     {
+        // TODO (Step 5): Implement real settings save logic
         MessageBox.Show(
             _isTranscodeMode ? "Transcode settings saved." : "Remux settings saved.",
             "Saved", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
+    // Returns the full path to the currently selected file in the TreeView,
+    // or null if nothing is selected.
+    private string? GetSelectedFilePath()
+    {
+        if (FileTree.SelectedItem is not FileLeafNode leaf) return null;
+        if (string.IsNullOrEmpty(_inputDirectory) || string.IsNullOrEmpty(_selectedMovieFolder))
+            return null;
+        return Path.Combine(_inputDirectory, _selectedMovieFolder, leaf.FileName);
+    }
 
-    // ── Startup validation ───────────────────────────────────────────
-
-    // Called from the constructor after InitializeComponent().
-    // If any tool paths are missing, open Preferences immediately
-    // so the user can set them — same behaviour as the original app.
+    // ── Preferences / startup ────────────────────────────────────────
     private void ValidatePathsOnStartup()
     {
         if (!AppSettings.Instance.AllPathsSet())
@@ -343,27 +588,17 @@ public partial class MainWindow : Window
                 "Application Paths Missing",
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
-
             OpenPreferences();
         }
     }
 
-    // Opens the UserPreferences window as a modal dialog.
-    // "Owner = this" centres it over the main window.
     private void OpenPreferences()
     {
         var prefs = new UserPreferences { Owner = this };
         prefs.ShowDialog();
-        // ShowDialog() blocks until the window is closed.
-        // Any changes the user made are already saved to AppSettings
-        // by the time we get back here.
     }
 
-    // ── Menu Handlers ────────────────────────────────────────────────
-
-    // The => here is an EXPRESSION-BODIED METHOD — a one-liner shorthand.
-    // It's equivalent to: private void Exit_Click(...) { Close(); }
-    // In VB.NET: Private Sub Exit_Click(...) : Me.Close() : End Sub
+    // ── Menu handlers ────────────────────────────────────────────────
     private void Exit_Click(object sender, RoutedEventArgs e) => Close();
 
     private void About_Click(object sender, RoutedEventArgs e)
@@ -372,56 +607,19 @@ public partial class MainWindow : Window
             MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
-    private void Preferences_Click(object sender, RoutedEventArgs e)
-        => OpenPreferences();
+    private void Preferences_Click(object sender, RoutedEventArgs e) => OpenPreferences();
 
-
-    // ── Helper Methods ───────────────────────────────────────────────
-
-    // Attempts to launch an external application with a file argument.
-    // Wrapped in try/catch so a missing app shows a friendly message
-    // rather than crashing.
+    // ── Helpers ──────────────────────────────────────────────────────
     private static void TryLaunch(string exe, string arg)
     {
         try
         {
-            // Wrapping arg in quotes handles file paths that contain spaces.
             System.Diagnostics.Process.Start(exe, $"\"{arg}\"");
         }
         catch
         {
-            MessageBox.Show($"Could not launch {exe}.\nMake sure it is installed and on PATH.",
+            MessageBox.Show($"Could not launch {exe}.\nCheck the path in Preferences.",
                 "Launch Error", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
-    }
-
-    // Populates the ListViews with sample data so the UI looks meaningful
-    // on first launch. Replace this with real MediaInfo/ffprobe calls.
-    private void LoadSampleData()
-    {
-        // Multiple items added to show what a real populated list looks like.
-        // Notice the compact single-line object initialiser syntax —
-        // valid C# when all properties fit on one line.
-        RemuxVideoTracks.Add(new RemuxVideoTrack
-            { VideoFormat = "H.264 / AVC", Resolution = "1920x1080", Fps = "23.976", IsDefault = true });
-
-        RemuxAudioTracks.Add(new RemuxAudioTrack
-            { AudioFormat = "DTS-HD MA", Width = "7.1ch", BitRate = "4608", Language = "eng", Title = "English", IsDefault = true, TrackId = "2" });
-        RemuxAudioTracks.Add(new RemuxAudioTrack
-            { AudioFormat = "AAC", Width = "2ch", BitRate = "192", Language = "jpn", Title = "Japanese", TrackId = "3" });
-
-        RemuxSubtitleTracks.Add(new RemuxSubtitleTrack
-            { SubtitleFormat = "ASS", Language = "eng", FrameCount = "1204", Title = "English", IsDefault = true, TrackId = "4" });
-        RemuxSubtitleTracks.Add(new RemuxSubtitleTrack
-            { SubtitleFormat = "PGS", Language = "eng", FrameCount = "312", Title = "English Forced", IsForced = true, TrackId = "5" });
-
-        TranscodeVideoTracks.Add(new TranscodeVideoTrack
-            { TrackInfo = "Video: H.264 1920x1080 @ 23.976fps", Resolution = "1920x1080", OutputFormat = "H.265 / HEVC", FrameRate = "23.976" });
-
-        TranscodeAudioTracks.Add(new TranscodeAudioTrack
-            { TrackInfo = "Audio: DTS-HD MA 7.1ch 4608Kbps [English]", Format = "AAC", Width = "5.1ch", BitRate = "640" });
-
-        TranscodeSubtitleTracks.Add(new TranscodeSubtitleTrack
-            { TrackInfo = "Subtitle: ASS [English]", IsDefault = true });
     }
 }

@@ -1,6 +1,6 @@
 <!-- ============================================================
      UserPreferences.xaml
-     ------------------------------------------------------------
+     ============================================================
      This is the User Preferences window. It lets the user set
      the paths to all the external tools the application needs,
      as well as default command-line option strings.
