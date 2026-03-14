@@ -4,6 +4,7 @@
 
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -370,10 +371,14 @@ public partial class MainWindow : Window
             foreach (var t in result.TranscodeVideo)    TranscodeVideoTracks.Add(t);
             foreach (var t in result.TranscodeAudio)    TranscodeAudioTracks.Add(t);
             foreach (var t in result.TranscodeSubtitle) TranscodeSubtitleTracks.Add(t);
+
+            // If a settings file exists for this file, load it to restore
+            // previously saved track selections and order.
+            if (FileTree.SelectedItem is FileLeafNode leaf)
+                LoadSettingsForFile(leaf);
         }
         catch (InvalidOperationException)
         {
-            // ffprobe path not configured — direct the user to Preferences
             MessageBox.Show(
                 "There was an issue with FFprobe. Please check the path in Preferences.",
                 "FFprobe Error",
@@ -381,12 +386,122 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            // Unexpected error (bad file, crash, etc.)
             MessageBox.Show(
                 $"Could not read track information:\n{ex.Message}",
                 "FFprobe Error",
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    // ── Load saved settings for a file ───────────────────────────────
+    // If a settings .txt file exists for the selected file, reads it and
+    // restores the previously saved track selections and audio track order.
+    //
+    // The command line contains all the information we need:
+    //   --audio-tracks 1,3,2    tells us which tracks were selected AND
+    //                           their order (if reordered via drag)
+    //   --subtitle-tracks 30,31 tells us which subtitles were selected
+    //
+    // All other tracks remain with IsSelected = false (the default).
+    private void LoadSettingsForFile(FileLeafNode leaf)
+    {
+        var modeFolder   = _isTranscodeMode ? "Transcode" : "Remux";
+        var nameNoExt    = Path.GetFileNameWithoutExtension(leaf.FileName);
+        var settingsFile = Path.Combine(_inputDirectory, modeFolder,
+                               _selectedMovieFolder, nameNoExt + ".txt");
+
+        if (!File.Exists(settingsFile)) return;
+
+        var command = File.ReadAllText(settingsFile);
+
+        // ── Parse --audio-tracks ──────────────────────────────────────
+        // Extract the comma-separated index list from "--audio-tracks 1,3,2"
+        var audioIndexes    = ParseTrackIndexes(command, "--audio-tracks");
+        var subtitleIndexes = ParseTrackIndexes(command, "--subtitle-tracks");
+
+        if (audioIndexes.Count == 0 && subtitleIndexes.Count == 0) return;
+
+        // ── Apply audio selections and order ──────────────────────────
+        if (audioIndexes.Count > 0)
+        {
+            // First mark IsSelected on all matching tracks
+            foreach (var track in RemuxAudioTracks)
+                track.IsSelected = audioIndexes.Contains(track.OriginalTrackIndex);
+
+            // Only reorder if the saved indexes are NOT in ascending order.
+            // e.g. "1,2,8" — tracks are in natural order, no reorder needed.
+            // e.g. "2,1,8" — tracks 1 and 2 were swapped by the user, restore it.
+            if (!CommandBuilder.IsAscendingOrder(audioIndexes))
+            {
+                // Find the current collection indexes (slots) occupied by the
+                // selected tracks, in ascending order.
+                // e.g. for selected tracks 1, 2, 8 in a 9-track list:
+                // slots = [0, 1, 7]
+                var slots = audioIndexes
+                    .Select(idx => RemuxAudioTracks.IndexOf(
+                        RemuxAudioTracks.First(t => t.OriginalTrackIndex == idx)))
+                    .OrderBy(i => i)
+                    .ToList();
+
+                // Build the desired track order from the saved sequence.
+                // e.g. saved order "2,1,8" → [track2, track1, track8]
+                var savedOrder = audioIndexes
+                    .Select(idx => RemuxAudioTracks.First(t => t.OriginalTrackIndex == idx))
+                    .ToList();
+
+                // Place each track into its assigned slot.
+                // Track 2 goes to slot 0, track 1 to slot 1, track 8 to slot 7.
+                // Unselected tracks (slots not in our list) are never touched.
+                for (int i = 0; i < slots.Count; i++)
+                {
+                    var targetSlot  = slots[i];
+                    var currentSlot = RemuxAudioTracks.IndexOf(savedOrder[i]);
+                    if (currentSlot != targetSlot)
+                        RemuxAudioTracks.Move(currentSlot, targetSlot);
+                }
+            }
+        }
+
+        // ── Apply subtitle selections ─────────────────────────────────
+        // Subtitles don't support drag reorder so we only set IsSelected.
+        if (subtitleIndexes.Count > 0)
+        {
+            foreach (var track in RemuxSubtitleTracks)
+                track.IsSelected = subtitleIndexes.Contains(track.OriginalTrackIndex);
+        }
+    }
+
+    // Parses a track index list from a command string.
+    // e.g. given "--audio-tracks 1,3,2" returns [1, 3, 2]
+    // Returns an empty list if the flag is not found.
+    private static List<int> ParseTrackIndexes(string command, string flag)
+    {
+        var result = new List<int>();
+
+        var pos = command.IndexOf(flag, StringComparison.OrdinalIgnoreCase);
+        if (pos < 0) return result;
+
+        // Move past the flag name to the value
+        var valueStart = pos + flag.Length;
+
+        // Skip any whitespace between the flag and the value
+        while (valueStart < command.Length && command[valueStart] == ' ')
+            valueStart++;
+
+        // Read characters until we hit a space or end of string
+        var valueEnd = valueStart;
+        while (valueEnd < command.Length && command[valueEnd] != ' ')
+            valueEnd++;
+
+        var value = command.Substring(valueStart, valueEnd - valueStart);
+
+        foreach (var part in value.Split(','))
+        {
+            if (int.TryParse(part.Trim(), out var idx))
+                result.Add(idx);
+        }
+
+        return result;
     }
 
     private void ClearTrackTables()
@@ -399,7 +514,6 @@ public partial class MainWindow : Window
         TranscodeSubtitleTracks.Clear();
     }
 
-    // ── Drag and drop for Audio ListView ────────────────────────────
     // These three handlers work together:
     // 1. PreviewMouseLeftButtonDown — record which row the drag started on
     // 2. PreviewMouseMove — once mouse moves far enough, start the drag
@@ -414,6 +528,9 @@ public partial class MainWindow : Window
     private void AudioList_Drop(object sender, DragEventArgs e)
         => HandleDrop(RemuxAudioList, RemuxAudioTracks, e);
 
+    private void AudioList_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        => ToggleRowSelection<RemuxAudioTrack>(RemuxAudioList, e);
+
     // ── Drag and drop for Subtitle ListView ─────────────────────────
     private void SubtitleList_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         => StartDragCapture(RemuxSubtitleList, e);
@@ -424,7 +541,32 @@ public partial class MainWindow : Window
     private void SubtitleList_Drop(object sender, DragEventArgs e)
         => HandleDrop(RemuxSubtitleList, RemuxSubtitleTracks, e);
 
+    private void SubtitleList_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        => ToggleRowSelection<RemuxSubtitleTrack>(RemuxSubtitleList, e);
+
     // ── Drag and drop implementation ─────────────────────────────────
+
+    // Toggles IsSelected on a track when the user clicks a row.
+    // Uses reflection to access IsSelected since it is defined on each
+    // subclass rather than the shared ObservableBase.
+    // Only fires if _dragFromIndex is still set (i.e. no drag occurred —
+    // HandleDrop resets it to -1 after a completed drag).
+    private void ToggleRowSelection<T>(ListView list, MouseButtonEventArgs e) where T : class
+    {
+        var hit  = list.InputHitTest(e.GetPosition(list)) as DependencyObject;
+        var item = FindAncestor<ListViewItem>(hit);
+        if (item?.DataContext is not T track) return;
+
+        // _dragFromIndex >= 0 means StartDragCapture fired but no drag occurred.
+        // Reset it and toggle IsSelected.
+        if (_dragFromIndex < 0) return;
+        _dragFromIndex = -1;
+
+        var prop = typeof(T).GetProperty("IsSelected");
+        if (prop == null) return;
+        var current = (bool)(prop.GetValue(track) ?? false);
+        prop.SetValue(track, !current);
+    }
 
     // Records the row index that the mouse button went down on.
     // Uses HitTest to find which item is under the mouse pointer.
@@ -433,6 +575,13 @@ public partial class MainWindow : Window
         // VisualTreeHelper.HitTest finds whatever visual element is under
         // the mouse. We walk up the visual tree to find the ListViewItem.
         var hit = list.InputHitTest(e.GetPosition(list)) as DependencyObject;
+
+        // If the click landed on a CheckBox, do not start drag capture.
+        // This lets the CheckBox handle its own click and toggle normally.
+        // Without this check, the drag handler captures the mouse first and
+        // the CheckBox never sees the click.
+        if (FindAncestor<CheckBox>(hit) != null) return;
+
         var item = FindAncestor<ListViewItem>(hit);
         if (item == null) return;
 
@@ -483,8 +632,13 @@ public partial class MainWindow : Window
         }
         else
         {
-            // Dropped below all rows — move to end of list
-            toIndex = collection.Count - 1;
+            // Drop landed outside the list bounds (above or below all rows).
+            // Get the drop Y position relative to the list.
+            var dropY = e.GetPosition(list).Y;
+
+            // If above the top of the list, move to first position.
+            // If below the last row (or anywhere else out of bounds), move to last.
+            toIndex = dropY < 0 ? 0 : collection.Count - 1;
         }
 
         if (fromIndex < 0 || toIndex < 0 || fromIndex == toIndex) return;
@@ -537,10 +691,100 @@ public partial class MainWindow : Window
 
     private void SaveSettings_Click(object sender, RoutedEventArgs e)
     {
-        // TODO (Step 5): Implement real settings save logic
-        MessageBox.Show(
-            _isTranscodeMode ? "Transcode settings saved." : "Remux settings saved.",
-            "Saved", MessageBoxButton.OK, MessageBoxImage.Information);
+        // ── Validate prerequisites ────────────────────────────────────
+        // Must have a file selected, an output directory, and an input directory.
+        if (FileTree.SelectedItem is not FileLeafNode leaf)
+        {
+            MessageBox.Show("No file selected. Please select a file from the tree.",
+                "Save Cancelled", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(OutputDirectoryBox.Text))
+        {
+            MessageBox.Show("No output directory chosen. Save cancelled.",
+                "Save Cancelled", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        // ── Build the command string ──────────────────────────────────
+        string command;
+        try
+        {
+            if (_isTranscodeMode)
+            {
+                command = CommandBuilder.BuildTranscodeCommand(
+                    _selectedMovieFolder,
+                    leaf.FileName,
+                    _inputDirectory,
+                    TranscodeVideoTracks,
+                    TranscodeAudioTracks,
+                    TranscodeSubtitleTracks);
+            }
+            else
+            {
+                command = CommandBuilder.BuildRemuxCommand(
+                    OutputDirectoryBox.Text,
+                    _selectedMovieFolder,
+                    leaf.FileName,
+                    _inputDirectory,
+                    RemuxAudioTracks,
+                    RemuxSubtitleTracks);
+            }
+        }
+        catch (InvalidOperationException ex)
+        {
+            // e.g. no audio tracks selected
+            MessageBox.Show(ex.Message, "Save Cancelled",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        // ── Build the settings file path ──────────────────────────────
+        // Mirrors the input folder structure under a "Remux" or "Transcode"
+        // subfolder in the input directory.
+        // e.g. H:\Video\Remux\Casino Royale (2006)\Casino Royale (2006).txt
+        //
+        // For extras (leaf nodes with a GroupKey), the filename includes the
+        // category suffix, matching the original app's behaviour.
+        // e.g. "Gettler Raises Bond's Suspicions-deleted.txt"
+        var modeFolder   = _isTranscodeMode ? "Transcode" : "Remux";
+        var nameNoExt    = Path.GetFileNameWithoutExtension(leaf.FileName);
+        var settingsDir  = Path.Combine(_inputDirectory, modeFolder, _selectedMovieFolder);
+        var settingsFile = Path.Combine(settingsDir, nameNoExt + ".txt");
+
+        // ── Confirm overwrite if file already exists ──────────────────
+        if (File.Exists(settingsFile))
+        {
+            var result = MessageBox.Show(
+                $"{modeFolder} settings already exist. Overwrite?",
+                $"{modeFolder} Settings",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+
+            if (result != MessageBoxResult.Yes) return;
+        }
+
+        // ── Write the file ────────────────────────────────────────────
+        try
+        {
+            // Create the folder structure if it doesn't exist yet.
+            // CreateDirectory does nothing if the folder already exists.
+            Directory.CreateDirectory(settingsDir);
+
+            // Write the command as UTF-8 text.
+            // File.WriteAllText handles creating or overwriting the file.
+            File.WriteAllText(settingsFile, command, System.Text.Encoding.UTF8);
+
+            // Update the TreeView node to green to show settings exist.
+            // This matches the original app's visual feedback.
+            leaf.Background = System.Windows.Media.Brushes.Green;
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Could not save settings file:\n{ex.Message}",
+                "Save Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     // Returns the full path to the currently selected file in the TreeView,

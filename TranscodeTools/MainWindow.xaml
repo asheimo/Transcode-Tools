@@ -304,11 +304,12 @@
                               x:Name="RemuxAudioList"
                               BorderThickness="1"
                               BorderBrush="{DynamicResource BorderColor}"
-                              SelectionMode="Extended"
+                              SelectionMode="Single"
                               AllowDrop="True"
                               ScrollViewer.VerticalScrollBarVisibility="Auto"
                               PreviewMouseLeftButtonDown="AudioList_PreviewMouseLeftButtonDown"
                               PreviewMouseMove="AudioList_PreviewMouseMove"
+                              MouseLeftButtonUp="AudioList_MouseLeftButtonUp"
                               Drop="AudioList_Drop">
                         <ListView.View>
                             <GridView>
@@ -327,7 +328,7 @@
                                 <GridViewColumn Header="Default"         Width="70">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
-                                            <CheckBox IsChecked="{Binding IsDefault}"/>
+                                            <CheckBox IsChecked="{Binding IsDefault}" IsEnabled="False"/>
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
@@ -342,11 +343,12 @@
                               x:Name="RemuxSubtitleList"
                               BorderThickness="1"
                               BorderBrush="{DynamicResource BorderColor}"
-                              SelectionMode="Extended"
+                              SelectionMode="Single"
                               AllowDrop="True"
                               ScrollViewer.VerticalScrollBarVisibility="Auto"
                               PreviewMouseLeftButtonDown="SubtitleList_PreviewMouseLeftButtonDown"
                               PreviewMouseMove="SubtitleList_PreviewMouseMove"
+                              MouseLeftButtonUp="SubtitleList_MouseLeftButtonUp"
                               Drop="SubtitleList_Drop">
                         <ListView.View>
                             <GridView>
@@ -363,14 +365,14 @@
                                 <GridViewColumn Header="Default"         Width="70">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
-                                            <CheckBox IsChecked="{Binding IsDefault}"/>
+                                            <CheckBox IsChecked="{Binding IsDefault}" IsEnabled="False"/>
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
                                 <GridViewColumn Header="Forced" Width="60">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
-                                            <CheckBox IsChecked="{Binding IsForced}"/>
+                                            <CheckBox IsChecked="{Binding IsForced}" IsEnabled="False"/>
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
@@ -437,14 +439,14 @@
                                 <GridViewColumn Header="Default" Width="70">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
-                                            <CheckBox IsChecked="{Binding IsDefault}"/>
+                                            <CheckBox IsChecked="{Binding IsDefault}" IsEnabled="False"/>
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
                                 <GridViewColumn Header="Forced" Width="60">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
-                                            <CheckBox IsChecked="{Binding IsForced}"/>
+                                            <CheckBox IsChecked="{Binding IsForced}" IsEnabled="False"/>
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>

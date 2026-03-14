@@ -221,7 +221,7 @@ public static class FfprobeService
             Language           = tags?["language"]?.GetValue<string>() ?? "",
             Title              = tags?["title"]?.GetValue<string>()    ?? "",
             IsDefault          = disposition?["default"]?.GetValue<int>() == 1,
-            IsSelected         = false   // default to included; user can deselect
+            IsSelected         = false   // user has to select which they want
         };
     }
 
@@ -253,11 +253,13 @@ public static class FfprobeService
             OriginalTrackIndex = index,
             SubtitleFormat     = s["codec_name"]?.GetValue<string>() ?? "",
             Language           = tags?["language"]?.GetValue<string>() ?? "",
-            // nb_frames is the frame/event count — not always present
-            FrameCount         = s["nb_frames"]?.GetValue<string>() ?? "",
+            // Frame count is stored as a MakeMKV tag, not a top-level field.
+            // Try "NUMBER_OF_FRAMES-eng" first, then "NUMBER_OF_FRAMES" without
+            // the language suffix — matching exactly what the original app did.
+            FrameCount         = GetNumberOfFrames(s),
             IsDefault          = disposition?["default"]?.GetValue<int>() == 1,
             IsForced           = disposition?["forced"]?.GetValue<int>()  == 1,
-            IsSelected         = false
+            IsSelected         = false   // user has to select which they want
         };
     }
 
@@ -279,6 +281,23 @@ public static class FfprobeService
     }
 
     // ── Field builder helpers ─────────────────────────────────────────
+
+    // Reads the subtitle frame count from MakeMKV tags.
+    // Tries "NUMBER_OF_FRAMES-eng" first, then "NUMBER_OF_FRAMES" without
+    // the language suffix, matching the original VB.NET app's behaviour.
+    // If neither is present, returns an empty string.
+    private static string GetNumberOfFrames(JsonNode s)
+    {
+        var tags = s["tags"];
+        if (tags == null) return "";
+
+        // Try with language suffix first
+        var withSuffix = tags["NUMBER_OF_FRAMES-eng"]?.GetValue<string>();
+        if (!string.IsNullOrEmpty(withSuffix)) return withSuffix;
+
+        // Fall back to without suffix
+        return tags["NUMBER_OF_FRAMES"]?.GetValue<string>() ?? "";
+    }
 
     // Builds "1920x1080" from width/height fields.
     // Returns empty string if either dimension is missing.
