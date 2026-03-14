@@ -264,17 +264,17 @@
                 <!-- REMUX MODE -->
                 <Grid x:Name="RemuxPanel">
                     <Grid.RowDefinitions>
-                        <!-- Video: auto-sizes to content, max 3 rows before scroll -->
+                        <!-- Video: auto-sizes to content, almost always one row -->
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto" MinHeight="52" MaxHeight="104"/>
                         <RowDefinition Height="8"/>
-                        <!-- Audio: auto-sizes to content, max 4 rows before scroll -->
+                        <!-- Audio: takes a proportional share of remaining space -->
                         <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto" MinHeight="52" MaxHeight="130"/>
+                        <RowDefinition Height="*" MinHeight="52"/>
                         <RowDefinition Height="8"/>
-                        <!-- Subtitles: auto-sizes to content, max 4 rows before scroll -->
+                        <!-- Subtitles: takes a proportional share of remaining space -->
                         <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto" MinHeight="52" MaxHeight="130"/>
+                        <RowDefinition Height="*" MinHeight="52"/>
                     </Grid.RowDefinitions>
 
                     <TextBlock Grid.Row="0" Text="VIDEO" Style="{StaticResource SectionLabel}"/>
@@ -293,13 +293,6 @@
                                 <GridViewColumn Header="Video Format" Width="180" DisplayMemberBinding="{Binding VideoFormat}"/>
                                 <GridViewColumn Header="Resolution"   Width="120" DisplayMemberBinding="{Binding Resolution}"/>
                                 <GridViewColumn Header="fps"          Width="120" DisplayMemberBinding="{Binding Fps}"/>
-                                <GridViewColumn Header="Default"      Width="80">
-                                    <GridViewColumn.CellTemplate>
-                                        <DataTemplate>
-                                            <CheckBox IsChecked="{Binding IsDefault}" IsEnabled="False"/>
-                                        </DataTemplate>
-                                    </GridViewColumn.CellTemplate>
-                                </GridViewColumn>
                             </GridView>
                         </ListView.View>
                     </ListView>
@@ -389,14 +382,17 @@
                 <!-- TRANSCODE MODE -->
                 <Grid x:Name="TranscodePanel" Visibility="Collapsed">
                     <Grid.RowDefinitions>
+                        <!-- Video: auto-sizes to content, almost always one row -->
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto" MinHeight="52" MaxHeight="104"/>
                         <RowDefinition Height="8"/>
+                        <!-- Audio: takes a proportional share of remaining space -->
                         <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto" MinHeight="52" MaxHeight="130"/>
+                        <RowDefinition Height="*" MinHeight="52"/>
                         <RowDefinition Height="8"/>
+                        <!-- Subtitles: takes a proportional share of remaining space -->
                         <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto" MinHeight="52" MaxHeight="130"/>
+                        <RowDefinition Height="*" MinHeight="52"/>
                     </Grid.RowDefinitions>
 
                     <TextBlock Grid.Row="0" Text="VIDEO" Style="{StaticResource SectionLabel}"/>

@@ -281,7 +281,11 @@ public partial class MainWindow : Window
     }
 
     // ── File selected in TreeView → populate tracks ──────────────────
-    private void FileTree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
+    // "async void" is the correct signature for WPF event handlers that
+    // need to use await. Normally async methods return Task, but event
+    // handlers must return void — this is the one accepted exception.
+    // In VB.NET: Async Sub FileTree_SelectedItemChanged(...)
+    private async void FileTree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
         // If a GROUP node was clicked, expand it and select its first child.
         // This way the user never needs to click twice — once to expand,
@@ -326,8 +330,7 @@ public partial class MainWindow : Window
         var fullPath = Path.Combine(_inputDirectory, _selectedMovieFolder, leaf.FileName);
         ShowSelectedFileBar(Path.GetFileNameWithoutExtension(leaf.FileName));
 
-        // TODO (Step 4): Replace this with a real ffprobe call
-        PopulateTracksForFile(fullPath);
+        await PopulateTracksForFileAsync(fullPath);
     }
 
     // Shows the selected file bar with the given filename
@@ -343,75 +346,47 @@ public partial class MainWindow : Window
         SelectedFileLabel.Text     = "";
     }
 
-    // ── Track population (placeholder until Step 4 ffprobe) ─────────
-    private void PopulateTracksForFile(string fullPath)
+    // ── Track population via ffprobe ─────────────────────────────────
+    // Calls FfprobeService to probe the file, then populates all six
+    // track collections from the result. The "await" means the UI stays
+    // responsive while ffprobe runs — no frozen window.
+    //
+    // "async Task" (not async void) because this is a helper method, not
+    // an event handler directly. Only event handlers use async void.
+    private async Task PopulateTracksForFileAsync(string fullPath)
     {
         ClearTrackTables();
 
-        // Placeholder data — will be replaced with real ffprobe output in Step 4
-        RemuxVideoTracks.Add(new RemuxVideoTrack
+        try
         {
-            OriginalTrackIndex = 0,
-            VideoFormat = "h264",
-            Resolution  = "1080p",
-            Fps         = "24000/1001",
-            IsDefault   = true
-        });
+            var result = await FfprobeService.ProbeFileAsync(fullPath);
 
-        RemuxAudioTracks.Add(new RemuxAudioTrack
-        {
-            OriginalTrackIndex = 1,
-            AudioFormat = "dts (DTS-HD MA)",
-            Width       = "5.1(side)",
-            BitRate     = "3886",
-            Language    = "eng",
-            Title       = "Surround 5.1",
-            IsDefault   = true,
-            IsSelected  = true
-        });
+            // Populate Remux tracks
+            foreach (var t in result.RemuxVideo)    RemuxVideoTracks.Add(t);
+            foreach (var t in result.RemuxAudio)    RemuxAudioTracks.Add(t);
+            foreach (var t in result.RemuxSubtitle) RemuxSubtitleTracks.Add(t);
 
-        RemuxSubtitleTracks.Add(new RemuxSubtitleTrack
+            // Populate Transcode tracks
+            foreach (var t in result.TranscodeVideo)    TranscodeVideoTracks.Add(t);
+            foreach (var t in result.TranscodeAudio)    TranscodeAudioTracks.Add(t);
+            foreach (var t in result.TranscodeSubtitle) TranscodeSubtitleTracks.Add(t);
+        }
+        catch (InvalidOperationException)
         {
-            OriginalTrackIndex = 2,
-            SubtitleFormat = "hdmv_pgs_subtitle",
-            Language       = "eng",
-            FrameCount     = "1840",
-            IsSelected     = true
-        });
-
-        RemuxSubtitleTracks.Add(new RemuxSubtitleTrack
+            // ffprobe path not configured — direct the user to Preferences
+            MessageBox.Show(
+                "There was an issue with FFprobe. Please check the path in Preferences.",
+                "FFprobe Error",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        catch (Exception ex)
         {
-            OriginalTrackIndex = 3,
-            SubtitleFormat = "hdmv_pgs_subtitle",
-            Language       = "fra",
-            FrameCount     = "10",
-            IsDefault      = true,
-            IsSelected     = true
-        });
-
-        TranscodeVideoTracks.Add(new TranscodeVideoTrack
-        {
-            OriginalTrackIndex = 0,
-            TrackInfo    = "Video: h264 1080p @ 24000/1001",
-            Resolution   = "1080p",
-            OutputFormat = "hevc",
-            FrameRate    = "24000/1001"
-        });
-
-        TranscodeAudioTracks.Add(new TranscodeAudioTrack
-        {
-            OriginalTrackIndex = 1,
-            TrackInfo = "Audio: dts (DTS-HD MA) 5.1 3886Kbps [eng]",
-            Format    = "dts",
-            Width     = "5.1(side)",
-            BitRate   = "3886"
-        });
-
-        TranscodeSubtitleTracks.Add(new TranscodeSubtitleTrack
-        {
-            OriginalTrackIndex = 2,
-            TrackInfo = "Subtitle: hdmv_pgs_subtitle [eng]"
-        });
+            // Unexpected error (bad file, crash, etc.)
+            MessageBox.Show(
+                $"Could not read track information:\n{ex.Message}",
+                "FFprobe Error",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     private void ClearTrackTables()

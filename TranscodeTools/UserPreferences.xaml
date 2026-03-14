@@ -17,7 +17,8 @@
         MinWidth="600" MinHeight="500"
         WindowStartupLocation="CenterOwner"
         ResizeMode="CanResize"
-        Background="{DynamicResource WindowBg}">
+        Background="{DynamicResource WindowBg}"
+        GotKeyboardFocus="Window_GotKeyboardFocus">
 
     <Window.Resources>
         <!-- Label style for the left-hand column -->

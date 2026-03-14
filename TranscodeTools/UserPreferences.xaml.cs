@@ -8,23 +8,95 @@
 
 using System.Diagnostics;  // For Process (running "where" command)
 using System.Windows;
-using Microsoft.Win32;     // For OpenFileDialog
+using System.Windows.Controls;  // For TextBox
+using System.Windows.Input;     // For KeyboardFocusChangedEventArgs
+using Microsoft.Win32;          // For OpenFileDialog
 
 namespace TranscodeTools;
 
 public partial class UserPreferences : Window
 {
+    // ── Snapshot for Cancel ──────────────────────────────────────────
+    // We take a copy of all settings when the window opens.
+    // If the user clicks Cancel, we restore this snapshot so that any
+    // changes they made in the text boxes are thrown away.
+    //
+    // Without this, editing a path and then clicking Cancel would leave
+    // AppSettings.Instance with the half-edited value even though nothing
+    // was saved to disk — because the text boxes write directly to the
+    // instance when SaveSettings() is called, but Cancel never called
+    // SaveSettings() so the in-memory object still held the dirty value.
+    //
+    // A record is a perfect fit here — it's an immutable snapshot.
+    // We create it once at open time and never change it.
+    private record SettingsSnapshot(
+        string MPV_Path,
+        string SubtitleEdit_Path,
+        string FFmpeg_Path,
+        string FFprobe_Path,
+        string OtherTranscode_Path,
+        string MKVPropEdit_Path,
+        string MKVMerge_Path,
+        string Ruby_Path,
+        string OtherTranscode_Defaults,
+        string OtherTranscode_Options,
+        string MKVMerge_Defaults,
+        string MKVMerge_Options,
+        string RoboCopy_Defaults
+    );
+
+    private readonly SettingsSnapshot _snapshot;
+
     // ── Constructor ──────────────────────────────────────────────────
     public UserPreferences()
     {
         InitializeComponent();
 
-        // Load the current saved settings into the text boxes
-        // as soon as the window is created.
+        // Take the snapshot BEFORE loading settings into the text boxes,
+        // so we capture the values exactly as they were when the window opened.
+        var s = AppSettings.Instance;
+        _snapshot = new SettingsSnapshot(
+            s.MPV_Path,
+            s.SubtitleEdit_Path,
+            s.FFmpeg_Path,
+            s.FFprobe_Path,
+            s.OtherTranscode_Path,
+            s.MKVPropEdit_Path,
+            s.MKVMerge_Path,
+            s.Ruby_Path,
+            s.OtherTranscode_Defaults,
+            s.OtherTranscode_Options,
+            s.MKVMerge_Defaults,
+            s.MKVMerge_Options,
+            s.RoboCopy_Defaults
+        );
+
+        // Load the current saved settings into the text boxes.
         LoadSettings();
     }
 
-    // ── Load / Save ──────────────────────────────────────────────────
+    // ── TextBox click-to-select-all ──────────────────────────────────
+    // This handler fires whenever any control inside the window receives
+    // keyboard focus — including when the user clicks a TextBox.
+    //
+    // We check if the focused element is a TextBox, and if so call
+    // SelectAll() to highlight its entire contents.
+    //
+    // Because this is on the Window rather than each individual TextBox,
+    // one handler covers every path box automatically — no need to wire
+    // up the same event thirteen times.
+    //
+    // GotKeyboardFocus rather than GotFocus is used because it fires
+    // reliably for both mouse clicks and Tab key navigation.
+    // In VB.NET WinForms the equivalent was handling the Enter event
+    // on each TextBox individually and calling SelectAll() there.
+    private void Window_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        // e.NewFocus is the element that just received focus.
+        // "is TextBox tb" pattern-matches and assigns it to tb in one step.
+        if (e.NewFocus is TextBox tb)
+            tb.SelectAll();
+    }
 
     // Reads from AppSettings.Instance and populates all text boxes.
     // AppSettings.Instance is our singleton — the one shared settings
@@ -104,8 +176,24 @@ public partial class UserPreferences : Window
 
     private void BtnCancel_Click(object sender, RoutedEventArgs e)
     {
-        // Close without saving — settings remain as they were before
-        // the window was opened.
+        // Restore AppSettings.Instance to exactly what it was when the
+        // window opened. This discards any edits the user made in the
+        // text boxes without saving them — true Cancel behaviour.
+        var s = AppSettings.Instance;
+        s.MPV_Path                = _snapshot.MPV_Path;
+        s.SubtitleEdit_Path       = _snapshot.SubtitleEdit_Path;
+        s.FFmpeg_Path             = _snapshot.FFmpeg_Path;
+        s.FFprobe_Path            = _snapshot.FFprobe_Path;
+        s.OtherTranscode_Path     = _snapshot.OtherTranscode_Path;
+        s.MKVPropEdit_Path        = _snapshot.MKVPropEdit_Path;
+        s.MKVMerge_Path           = _snapshot.MKVMerge_Path;
+        s.Ruby_Path               = _snapshot.Ruby_Path;
+        s.OtherTranscode_Defaults = _snapshot.OtherTranscode_Defaults;
+        s.OtherTranscode_Options  = _snapshot.OtherTranscode_Options;
+        s.MKVMerge_Defaults       = _snapshot.MKVMerge_Defaults;
+        s.MKVMerge_Options        = _snapshot.MKVMerge_Options;
+        s.RoboCopy_Defaults       = _snapshot.RoboCopy_Defaults;
+
         DialogResult = false;
         Close();
     }
