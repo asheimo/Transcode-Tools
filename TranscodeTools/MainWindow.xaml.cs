@@ -22,6 +22,24 @@ public partial class MainWindow : Window
     public ObservableCollection<TranscodeAudioTrack>    TranscodeAudioTracks    { get; } = new();
     public ObservableCollection<TranscodeSubtitleTrack> TranscodeSubtitleTracks { get; } = new();
 
+    // ── Transcode dropdown option lists ─────────────────────────────
+    // Static lists used as ItemsSource for the ComboBoxes in the Transcode
+    // video and audio tables. Defined here so the XAML can bind to them via
+    // RelativeSource. In VB.NET WinForms these were hard-coded into the
+    // DataGridViewComboBoxColumn.Items collection in the Designer.
+    public static readonly IReadOnlyList<string> VideoResolutionOptions =
+        ["Keep", "480p", "720p", "1080p", "2160p"];
+    public static readonly IReadOnlyList<string> VideoOutputFormatOptions =
+        ["h.264 (default)", "hevc"];
+    public static readonly IReadOnlyList<string> VideoFrameRateOptions =
+        ["Keep", "30000/1001", "24000/1001"];
+    public static readonly IReadOnlyList<string> AudioFormatOptions =
+        ["Keep", "eac3", "ac3"];
+    public static readonly IReadOnlyList<string> AudioWidthOptions =
+        ["Keep", "Surround", "Stereo", "Mono"];
+    public static readonly IReadOnlyList<string> AudioBitRateOptions =
+        ["Keep", "1536", "768", "640", "320", "192"];
+
     // ── File browser state ───────────────────────────────────────────
     // The currently selected input folder path, e.g. "H:\Video"
     private string _inputDirectory = "";
@@ -83,6 +101,7 @@ public partial class MainWindow : Window
 
         SaveRemuxBtn.Visibility     = _isTranscodeMode ? Visibility.Collapsed : Visibility.Visible;
         SaveTranscodeBtn.Visibility = _isTranscodeMode ? Visibility.Visible   : Visibility.Collapsed;
+        RunMenuItem.Header          = _isTranscodeMode ? "Run Transcode"       : "Run Remux";
 
         foreach (var btn in btnRemux)
             if (btn != null)
@@ -827,6 +846,26 @@ public partial class MainWindow : Window
     }
 
     private void Preferences_Click(object sender, RoutedEventArgs e) => OpenPreferences();
+
+    private void Run_Click(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(_inputDirectory))
+        {
+            MessageBox.Show("Please select an input directory first.",
+                "No Input Directory", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(OutputDirectoryBox.Text))
+        {
+            MessageBox.Show("Please select an output directory first.",
+                "No Output Directory", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var runWindow = new RunRemux(_inputDirectory, OutputDirectoryBox.Text, _isTranscodeMode);
+        runWindow.Owner = this;
+        runWindow.ShowDialog();
+    }
 
     // ── Helpers ──────────────────────────────────────────────────────
     private static void TryLaunch(string exe, string arg)

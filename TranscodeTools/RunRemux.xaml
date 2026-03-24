@@ -1,0 +1,115 @@
+<!-- ============================================================
+     RunRemux.xaml
+     ============================================================
+     Run processing window. Shows a TreeView of movie folders on
+     the left for selection, and a live output log on the right.
+     Opened from the File menu in Remux or Transcode mode.
+     ============================================================ -->
+<Window x:Class="TranscodeTools.RunRemux"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Run Remux"
+        Width="1000" Height="700"
+        MinWidth="700" MinHeight="500"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="CanResize"
+        Background="{DynamicResource WindowBg}"
+        Loaded="RunRemux_Loaded">
+
+    <DockPanel>
+
+        <!-- Bottom button bar -->
+        <Border DockPanel.Dock="Bottom"
+                BorderThickness="0,1,0,0"
+                BorderBrush="{DynamicResource BorderColor}"
+                Padding="12,10">
+            <Grid>
+                <!-- Show files toggle — left aligned -->
+                <CheckBox x:Name="ShowFilesCheckBox"
+                          Content="Show individual files"
+                          VerticalAlignment="Center"
+                          HorizontalAlignment="Left"
+                          Checked="ShowFilesCheckBox_Changed"
+                          Unchecked="ShowFilesCheckBox_Changed"/>
+
+                <!-- Start and Close/Cancel buttons — right aligned -->
+                <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
+                    <Button x:Name="StartBtn"
+                            Content="Start"
+                            Style="{StaticResource AccentButton}"
+                            Margin="0,0,8,0"
+                            Click="StartBtn_Click"/>
+                    <Button x:Name="CancelCloseBtn"
+                            Content="Close"
+                            Style="{StaticResource FlatButton}"
+                            Click="CancelCloseBtn_Click"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Main content — TreeView left, log right -->
+        <Grid Margin="12,10,12,10">
+            <Grid.ColumnDefinitions>
+                <!-- Folder/file selector — fixed width -->
+                <ColumnDefinition Width="280"/>
+                <ColumnDefinition Width="8"/>
+                <!-- Output log — takes remaining space -->
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Left: folder/file TreeView -->
+            <Grid Grid.Column="0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0"
+                           Text="SELECT FOLDERS TO PROCESS"
+                           Style="{StaticResource SectionLabel}"
+                           Margin="0,0,0,6"/>
+
+                <Border Grid.Row="1"
+                        BorderThickness="1"
+                        BorderBrush="{DynamicResource BorderColor}"
+                        CornerRadius="4">
+                    <TreeView x:Name="FolderTree"
+                              Background="Transparent"
+                              BorderThickness="0"
+                              FontSize="13"
+                              ScrollViewer.VerticalScrollBarVisibility="Auto"/>
+                </Border>
+            </Grid>
+
+            <!-- Right: live output log -->
+            <Grid Grid.Column="2">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0"
+                           Text="OUTPUT"
+                           Style="{StaticResource SectionLabel}"
+                           Margin="0,0,0,6"/>
+
+                <Border Grid.Row="1"
+                        BorderThickness="1"
+                        BorderBrush="{DynamicResource BorderColor}"
+                        CornerRadius="4">
+                    <TextBox x:Name="OutputLog"
+                             Background="Transparent"
+                             BorderThickness="0"
+                             FontSize="12"
+                             FontFamily="Consolas"
+                             IsReadOnly="True"
+                             TextWrapping="Wrap"
+                             VerticalScrollBarVisibility="Auto"
+                             AcceptsReturn="True"
+                             Padding="8"/>
+                </Border>
+            </Grid>
+
+        </Grid>
+    </DockPanel>
+</Window>

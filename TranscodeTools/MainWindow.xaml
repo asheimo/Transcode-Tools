@@ -1,6 +1,7 @@
 <Window x:Class="TranscodeTools.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:sys="clr-namespace:System;assembly=mscorlib"
         xmlns:local="clr-namespace:TranscodeTools"
         Title="Transcode Tools"
         Width="1100" Height="820"
@@ -48,6 +49,42 @@
             <Setter Property="Padding" Value="2,2"/>
             <Setter Property="IsExpanded" Value="False"/>
         </Style>
+        <!-- Transcode dropdown option lists -->
+        <x:Array x:Key="VideoResolutionOptions" Type="sys:String">
+            <sys:String>Keep</sys:String>
+            <sys:String>480p</sys:String>
+            <sys:String>720p</sys:String>
+            <sys:String>1080p</sys:String>
+            <sys:String>2160p</sys:String>
+        </x:Array>
+        <x:Array x:Key="VideoOutputFormatOptions" Type="sys:String">
+            <sys:String>h.264</sys:String>
+            <sys:String>hevc (default)</sys:String>
+        </x:Array>
+        <x:Array x:Key="VideoFrameRateOptions" Type="sys:String">
+            <sys:String>Keep</sys:String>
+            <sys:String>30000/1001</sys:String>
+            <sys:String>24000/1001</sys:String>
+        </x:Array>
+        <x:Array x:Key="AudioFormatOptions" Type="sys:String">
+            <sys:String>Keep</sys:String>
+            <sys:String>eac3</sys:String>
+            <sys:String>ac3</sys:String>
+        </x:Array>
+        <x:Array x:Key="AudioWidthOptions" Type="sys:String">
+            <sys:String>Keep</sys:String>
+            <sys:String>Surround</sys:String>
+            <sys:String>Stereo</sys:String>
+            <sys:String>Mono</sys:String>
+        </x:Array>
+        <x:Array x:Key="AudioBitRateOptions" Type="sys:String">
+            <sys:String>Keep</sys:String>
+            <sys:String>1536</sys:String>
+            <sys:String>768</sys:String>
+            <sys:String>640</sys:String>
+            <sys:String>320</sys:String>
+            <sys:String>192</sys:String>
+        </x:Array>
     </Window.Resources>
 
     <DockPanel>
@@ -60,6 +97,7 @@
             <MenuItem Header="File">
                 <MenuItem Header="Open Input Directory"  Click="OpenInputDirectory_Click"/>
                 <MenuItem Header="Open Output Directory" Click="OpenOutputDirectory_Click"/>
+                <MenuItem x:Name="RunMenuItem" Header="Run Remux" Click="Run_Click"/>
                 <Separator/>
                 <MenuItem Header="Preferences"           Click="Preferences_Click"/>
                 <Separator/>
@@ -401,14 +439,40 @@
 
                     <ListView Grid.Row="1" x:Name="TranscodeVideoList"
                               BorderThickness="1" BorderBrush="{DynamicResource BorderColor}"
-                              IsHitTestVisible="False"
                               ScrollViewer.VerticalScrollBarVisibility="Auto">
                         <ListView.View>
                             <GridView>
-                                <GridViewColumn Header="Track Info"    Width="350" DisplayMemberBinding="{Binding TrackInfo}"/>
-                                <GridViewColumn Header="Resolution"    Width="120" DisplayMemberBinding="{Binding Resolution}"/>
-                                <GridViewColumn Header="Output Format" Width="130" DisplayMemberBinding="{Binding OutputFormat}"/>
-                                <GridViewColumn Header="Frame Rate"    Width="100" DisplayMemberBinding="{Binding FrameRate}"/>
+                                <GridViewColumn Header="Track Info" Width="350" DisplayMemberBinding="{Binding TrackInfo}"/>
+                                <!-- Resolution: not currently functional (matches original); dropdown present but value is not used in the command -->
+                                <GridViewColumn Header="Resolution" Width="120">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <ComboBox SelectedItem="{Binding Resolution, Mode=TwoWay}"
+                                                      ItemsSource="{StaticResource VideoResolutionOptions}"
+                                                      Width="110" IsEnabled="False"/>
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                                <!-- Output Format: the only video option, hevc adds —–hevc, that affects the command -->
+                                <GridViewColumn Header="Output Format" Width="150">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <ComboBox SelectedItem="{Binding OutputFormat, Mode=TwoWay}"
+                                                      ItemsSource="{StaticResource VideoOutputFormatOptions}"
+                                                      Width="140"/>
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                                <!-- Frame Rate: not currently functional (matches original); dropdown present but value is not used in the command -->
+                                <GridViewColumn Header="Frame Rate" Width="150">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <ComboBox SelectedItem="{Binding FrameRate, Mode=TwoWay}"
+                                                      ItemsSource="{StaticResource VideoFrameRateOptions}"
+                                                      Width="140" IsEnabled="False"/>
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
                             </GridView>
                         </ListView.View>
                     </ListView>
@@ -420,10 +484,37 @@
                               ScrollViewer.VerticalScrollBarVisibility="Auto">
                         <ListView.View>
                             <GridView>
-                                <GridViewColumn Header="Track Info"      Width="350" DisplayMemberBinding="{Binding TrackInfo}"/>
-                                <GridViewColumn Header="Format"          Width="120" DisplayMemberBinding="{Binding Format}"/>
-                                <GridViewColumn Header="Width"           Width="80"  DisplayMemberBinding="{Binding Width}"/>
-                                <GridViewColumn Header="Bit Rate (Kbps)" Width="120" DisplayMemberBinding="{Binding BitRate}"/>
+                                <GridViewColumn Header="Track Info" Width="300" DisplayMemberBinding="{Binding TrackInfo}"/>
+                                <!-- Format: eac3 adds —–eac3 to options; Keep copies the stream -->
+                                <GridViewColumn Header="Format" Width="110">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <ComboBox SelectedItem="{Binding Format, Mode=TwoWay}"
+                                                      ItemsSource="{StaticResource AudioFormatOptions}"
+                                                      Width="100"/>
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                                <!-- Width: controls the —–main-audio and —–add-audio channel target -->
+                                <GridViewColumn Header="Width" Width="110">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <ComboBox SelectedItem="{Binding Width, Mode=TwoWay}"
+                                                      ItemsSource="{StaticResource AudioWidthOptions}"
+                                                      Width="100"/>
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                                <!-- Bit Rate: not currently used in the command (matches original); present for future use -->
+                                <GridViewColumn Header="Bit Rate (Kbps)" Width="130">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <ComboBox SelectedItem="{Binding BitRate, Mode=TwoWay}"
+                                                      ItemsSource="{StaticResource AudioBitRateOptions}"
+                                                      Width="120" IsEnabled="False"/>
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
                             </GridView>
                         </ListView.View>
                     </ListView>

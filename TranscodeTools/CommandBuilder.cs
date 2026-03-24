@@ -170,12 +170,12 @@ public static class CommandBuilder
         var sb = new StringBuilder();
 
         // ── Video options ─────────────────────────────────────────────
-        // Check if the user selected hevc output — adds --hevc flag.
+        // Check if the user selected hevc output — adds —–hevc flag.
         // other-transcode defaults to h264 if no format is specified.
         var video = videoTracks.FirstOrDefault();
         var outputFormat = "";
         if (video != null &&
-            video.OutputFormat.Equals("hevc", StringComparison.OrdinalIgnoreCase))
+            video.OutputFormat.Equals("hevc (default)", StringComparison.OrdinalIgnoreCase))
         {
             outputFormat = "--hevc ";
         }

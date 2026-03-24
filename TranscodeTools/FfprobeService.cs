@@ -195,14 +195,30 @@ public static class FfprobeService
         var resolution = BuildResolution(s);
         var fps        = BuildFps(s);
 
+        // Map the raw resolution (e.g. "1920x1080") to the nearest dropdown item.
+        // We extract the height and match it to a known "p" value.
+        // If the height doesn't match a known item, fall back to "Keep".
+        var height          = s["height"]?.GetValue<int>() ?? 0;
+        var resolutionItem  = height switch
+        {
+            480  => "480p",
+            720  => "720p",
+            1080 => "1080p",
+            2160 => "2160p",
+            _    => "Keep"
+        };
+
         return new TranscodeVideoTrack
         {
             OriginalTrackIndex = index,
-            // TrackInfo is the human-readable summary shown in the Transcode table
+            // TrackInfo is the human-readable summary shown in the Transcode table.
+            // Uses the raw resolution string (e.g. "1920x1080") for full detail.
             TrackInfo    = $"Video: {codec} {resolution} @ {fps}",
-            Resolution   = resolution,
-            // OutputFormat starts empty — the user will choose the encode target
-            OutputFormat = "",
+            // Resolution uses the mapped "p" value so it matches a dropdown item.
+            Resolution   = resolutionItem,
+            // Default to "hevc (default)" — hevc is the preferred output format.
+            // Selecting "h.264" will not add the —–hevc flag; hevc (default) will.
+            OutputFormat = "hevc (default)",
             FrameRate    = fps
         };
     }
@@ -237,9 +253,11 @@ public static class FfprobeService
         {
             OriginalTrackIndex = index,
             TrackInfo = $"Audio: {format} {channels} {bitrate}Kbps [{lang}]".Trim(),
-            Format    = s["codec_name"]?.GetValue<string>() ?? "",
-            Width     = channels,
-            BitRate   = bitrate
+            // All three dropdowns default to "Keep" — meaning copy without re-encoding.
+            // The user changes these only if they want to transcode a specific track.
+            Format    = "Keep",
+            Width     = "Keep",
+            BitRate   = "Keep"
         };
     }
 
