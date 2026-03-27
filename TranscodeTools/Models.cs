@@ -270,6 +270,13 @@ public class TranscodeSubtitleTrack : ObservableBase
         set { _trackInfo = value; OnPropertyChanged(); }
     }
 
+    private string _frameCount = "";
+    public string FrameCount
+    {
+        get => _frameCount;
+        set { _frameCount = value; OnPropertyChanged(); }
+    }
+
     private bool _isDefault;
     public bool IsDefault
     {

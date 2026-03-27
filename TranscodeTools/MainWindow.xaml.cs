@@ -414,14 +414,19 @@ public partial class MainWindow : Window
 
     // ── Load saved settings for a file ───────────────────────────────
     // If a settings .txt file exists for the selected file, reads it and
-    // restores the previously saved track selections and audio track order.
+    // restores the previously saved track state.
     //
-    // The command line contains all the information we need:
-    //   --audio-tracks 1,3,2    tells us which tracks were selected AND
-    //                           their order (if reordered via drag)
-    //   --subtitle-tracks 30,31 tells us which subtitles were selected
+    // For Remux, the command contains:
+    //   --audio-tracks 1,3,2    which tracks are selected AND their order
+    //   --subtitle-tracks 30,31 which subtitle tracks are selected
     //
-    // All other tracks remain with IsSelected = false (the default).
+    // For Transcode, the command contains:
+    //   --hevc                  video output format
+    //   --main-audio 1=surround audio width for the primary track
+    //   --add-audio 2=stereo    audio width for each additional track
+    //   --eac3                  global audio format flag
+    //   --burn-subtitle N       which subtitle track (1-based) has Burn set
+    //   --add-subtitle N        which subtitle tracks are included
     private void LoadSettingsForFile(FileLeafNode leaf)
     {
         var modeFolder   = _isTranscodeMode ? "Transcode" : "Remux";
@@ -433,6 +438,17 @@ public partial class MainWindow : Window
 
         var command = File.ReadAllText(settingsFile);
 
+        if (_isTranscodeMode)
+            LoadTranscodeSettings(command);
+        else
+            LoadRemuxSettings(command);
+    }
+
+    // ── Restore Remux track state from a saved command string ─────────
+    // Parses --audio-tracks and --subtitle-tracks from the mkvmerge command,
+    // restores IsSelected on each track, and re-applies any saved audio order.
+    private void LoadRemuxSettings(string command)
+    {
         // ── Parse --audio-tracks ──────────────────────────────────────
         // Extract the comma-separated index list from "--audio-tracks 1,3,2"
         var audioIndexes    = ParseTrackIndexes(command, "--audio-tracks");
@@ -487,6 +503,131 @@ public partial class MainWindow : Window
         {
             foreach (var track in RemuxSubtitleTracks)
                 track.IsSelected = subtitleIndexes.Contains(track.OriginalTrackIndex);
+        }
+    }
+
+    // ── Restore Transcode track state from a saved command string ─────
+    // Parses the other-transcode command and restores:
+    //   - Video OutputFormat  (presence of --hevc)
+    //   - Audio Width         (=surround/stereo/mono/original per track)
+    //   - Audio Format        (presence of --eac3)
+    //   - Subtitle Burn       (--burn-subtitle N sets Burn on track N)
+    private void LoadTranscodeSettings(string command)
+    {
+        // ── Video: OutputFormat ───────────────────────────────────────
+        // --hevc present → "hevc (default)", absent → "h.264"
+        // We match the exact option strings defined in VideoOutputFormatOptions.
+        var video = TranscodeVideoTracks.FirstOrDefault();
+        if (video != null)
+        {
+            video.OutputFormat = command.Contains("--hevc", StringComparison.OrdinalIgnoreCase)
+                ? "hevc (default)"
+                : "h.264";
+        }
+
+        // ── Audio: Width and Format ───────────────────────────────────
+        // The command contains "--main-audio 1=surround" and "--add-audio 2=stereo" etc.
+        // We parse these in positional order (1-based) to match each TranscodeAudioTrack.
+        //
+        // --eac3 is a global flag — if present, we set Format = "eac3" on all tracks.
+        // This mirrors how BuildTranscodeCommand writes it: one flag for all tracks.
+        var hasEac3 = command.Contains("--eac3", StringComparison.OrdinalIgnoreCase);
+
+        // Build a map of position → width string from the command.
+        // Position 1 comes from --main-audio, positions 2+ from --add-audio.
+        //
+        // In C#, Dictionary<int, string> is the equivalent of a VB.NET Dictionary(Of Integer, String).
+        // It gives us O(1) lookup by track position number.
+        var widthByPosition = new Dictionary<int, string>();
+        ParseAudioWidths(command, widthByPosition);
+
+        // Apply to each track in collection order (index 0 = position 1, etc.)
+        for (int i = 0; i < TranscodeAudioTracks.Count; i++)
+        {
+            var track    = TranscodeAudioTracks[i];
+            var position = i + 1;   // other-transcode is 1-based
+
+            // Restore Width
+            if (widthByPosition.TryGetValue(position, out var savedWidth))
+            {
+                // Map the saved lowercase value back to the dropdown option string.
+                // "original" in the command means the "Keep" option in the UI.
+                track.Width = savedWidth switch
+                {
+                    "surround" => "Surround",
+                    "stereo"   => "Stereo",
+                    "mono"     => "Mono",
+                    "original" => "Keep",
+                    _          => "Keep"    // fallback for any unrecognised value
+                };
+            }
+
+            // Restore Format — eac3 is global, so apply to every track if present
+            if (hasEac3)
+                track.Format = "eac3";
+        }
+
+        // ── Subtitles: Burn ───────────────────────────────────────────
+        // --burn-subtitle N sets Burn = true on the Nth subtitle track (1-based).
+        // --add-subtitle N  is the default (Burn = false); already the model default.
+        // We collect all burned positions and apply them.
+        //
+        // ParseTrackIndexes reuses the existing helper — it extracts the
+        // space-delimited integer after a named flag, which is exactly what we need.
+        var burnPositions = ParseTrackIndexes(command, "--burn-subtitle");
+
+        for (int i = 0; i < TranscodeSubtitleTracks.Count; i++)
+        {
+            var position = i + 1;
+            TranscodeSubtitleTracks[i].Burn = burnPositions.Contains(position);
+        }
+    }
+
+    // ── Parse audio width values from a transcode command string ──────
+    // Fills the provided dictionary with position → width entries.
+    //
+    // Handles:
+    //   --main-audio 1=surround   → position 1, width "surround"
+    //   --main-audio 1            → position 1, width "surround" (other-transcode default)
+    //   --add-audio 2=stereo      → position 2, width "stereo"
+    //   --add-audio 3             → position 3, width "stereo"  (other-transcode default)
+    private static void ParseAudioWidths(string command, Dictionary<int, string> result)
+    {
+        // We scan for each --main-audio and --add-audio occurrence in the command.
+        // string.Split on spaces gives us tokens we can walk through.
+        // This is simpler than regex for this predictable format.
+        var tokens = command.Split(' ');
+
+        for (int i = 0; i < tokens.Length - 1; i++)
+        {
+            string flag = tokens[i];
+            bool isMain = flag.Equals("--main-audio", StringComparison.OrdinalIgnoreCase);
+            bool isAdd  = flag.Equals("--add-audio",  StringComparison.OrdinalIgnoreCase);
+
+            if (!isMain && !isAdd) continue;
+
+            // The next token is the argument, e.g. "1=surround" or just "2"
+            var arg = tokens[i + 1];
+
+            int position;
+            string width;
+
+            if (arg.Contains('='))
+            {
+                // "1=surround" — split on '=' to get position and width
+                var parts = arg.Split('=');
+                if (!int.TryParse(parts[0], out position)) continue;
+                width = parts[1].ToLower();
+            }
+            else
+            {
+                // No '=' — just a track number, use the other-transcode defaults:
+                // main-audio defaults to surround, add-audio defaults to stereo
+                if (!int.TryParse(arg, out position)) continue;
+                width = isMain ? "surround" : "stereo";
+            }
+
+            result[position] = width;
         }
     }
 

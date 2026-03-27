@@ -185,10 +185,13 @@ public static class CommandBuilder
         // --main-audio 1=<width>  sets the primary audio track
         // --add-audio  N=<width>  adds additional tracks
         //
-        // If a DTS track is set to Keep (copy), we need --pass-dts.
-        var audioSb   = new StringBuilder();
+        // --eac3 and --pass-dts are global flags — they affect all tracks,
+        // not individual ones. We check whether any track needs each flag
+        // after the loop and append each at most once.
+        var audioSb     = new StringBuilder();
+        var needEac3    = false;
         var needPassDts = false;
-        var position  = 1;
+        var position    = 1;
 
         foreach (var t in audioTracks)
         {
@@ -203,7 +206,12 @@ public static class CommandBuilder
             else
                 audioSb.Append($"--add-audio {position}={width} ");
 
-            // Check if this is a DTS track being kept — needs --pass-dts
+            // Check if any track is eac3 — --eac3 is a global flag, so we
+            // only need to add it once even if multiple tracks use eac3.
+            if (t.Format.Equals("eac3", StringComparison.OrdinalIgnoreCase))
+                needEac3 = true;
+
+            // Check if any DTS track is being kept — needs --pass-dts
             if (t.Format.Contains("dts", StringComparison.OrdinalIgnoreCase) &&
                 (t.Width.Equals("keep", StringComparison.OrdinalIgnoreCase) ||
                  string.IsNullOrWhiteSpace(t.Width)))
@@ -211,12 +219,12 @@ public static class CommandBuilder
                 needPassDts = true;
             }
 
-            // eac3 output requires --eac3 in options
-            if (t.Format.Equals("eac3", StringComparison.OrdinalIgnoreCase))
-                options = options.TrimEnd() + " --eac3";
-
             position++;
         }
+
+        // Append global audio flags once, after the loop
+        if (needEac3)
+            options = options.TrimEnd() + " --eac3";
 
         if (needPassDts)
             options = options.TrimEnd() + " --pass-dts";

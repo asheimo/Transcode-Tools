@@ -292,6 +292,7 @@ public static class FfprobeService
         {
             OriginalTrackIndex = index,
             TrackInfo  = $"Subtitle: {codec} [{lang}]".Trim(),
+            FrameCount = GetNumberOfFrames(s),
             IsDefault  = disposition?["default"]?.GetValue<int>() == 1,
             IsForced   = disposition?["forced"]?.GetValue<int>()  == 1,
             Burn       = false   // user sets this manually

@@ -526,7 +526,8 @@
                               ScrollViewer.VerticalScrollBarVisibility="Auto">
                         <ListView.View>
                             <GridView>
-                                <GridViewColumn Header="Track Info" Width="380" DisplayMemberBinding="{Binding TrackInfo}"/>
+                                <GridViewColumn Header="Track Info" Width="280" DisplayMemberBinding="{Binding TrackInfo}"/>
+                                <GridViewColumn Header="# of Frames" Width="100" DisplayMemberBinding="{Binding FrameCount}"/>
                                 <GridViewColumn Header="Default" Width="70">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
