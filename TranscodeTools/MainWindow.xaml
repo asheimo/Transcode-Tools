@@ -58,8 +58,17 @@
             <sys:String>2160p</sys:String>
         </x:Array>
         <x:Array x:Key="VideoOutputFormatOptions" Type="sys:String">
-            <sys:String>h.264</sys:String>
             <sys:String>hevc (default)</sys:String>
+            <sys:String>h.264</sys:String>
+        </x:Array>
+        <x:Array x:Key="VideoPresetOptions" Type="sys:String">
+            <sys:String>p1</sys:String>
+            <sys:String>p2</sys:String>
+            <sys:String>p3</sys:String>
+            <sys:String>p4</sys:String>
+            <sys:String>p5</sys:String>
+            <sys:String>p6</sys:String>
+            <sys:String>p7</sys:String>
         </x:Array>
         <x:Array x:Key="VideoFrameRateOptions" Type="sys:String">
             <sys:String>Keep</sys:String>
@@ -442,34 +451,44 @@
                               ScrollViewer.VerticalScrollBarVisibility="Auto">
                         <ListView.View>
                             <GridView>
-                                <GridViewColumn Header="Track Info" Width="350" DisplayMemberBinding="{Binding TrackInfo}"/>
-                                <!-- Resolution: not currently functional (matches original); dropdown present but value is not used in the command -->
-                                <GridViewColumn Header="Resolution" Width="120">
+                                <GridViewColumn Header="Track Info" Width="280" DisplayMemberBinding="{Binding TrackInfo}"/>
+                                <!-- Resolution: not currently functional; dropdown disabled pending implementation -->
+                                <GridViewColumn Header="Resolution" Width="110">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
                                             <ComboBox SelectedItem="{Binding Resolution, Mode=TwoWay}"
                                                       ItemsSource="{StaticResource VideoResolutionOptions}"
-                                                      Width="110" IsEnabled="False"/>
+                                                      Width="100" IsEnabled="False"/>
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
-                                <!-- Output Format: the only video option, hevc adds —–hevc, that affects the command -->
-                                <GridViewColumn Header="Output Format" Width="150">
+                                <!-- Output Format: hevc uses hevc_nvenc + 10-bit pipeline; h.264 uses h264_nvenc -->
+                                <GridViewColumn Header="Output Format" Width="140">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
                                             <ComboBox SelectedItem="{Binding OutputFormat, Mode=TwoWay}"
                                                       ItemsSource="{StaticResource VideoOutputFormatOptions}"
-                                                      Width="140"/>
+                                                      Width="130"/>
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
-                                <!-- Frame Rate: not currently functional (matches original); dropdown present but value is not used in the command -->
-                                <GridViewColumn Header="Frame Rate" Width="150">
+                                <!-- Preset: p1=fastest/lowest quality through p7=slowest/highest quality -->
+                                <GridViewColumn Header="Preset" Width="90">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <ComboBox SelectedItem="{Binding Preset, Mode=TwoWay}"
+                                                      ItemsSource="{StaticResource VideoPresetOptions}"
+                                                      Width="80"/>
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                                <!-- Frame Rate: not currently functional; dropdown disabled pending implementation -->
+                                <GridViewColumn Header="Frame Rate" Width="130">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
                                             <ComboBox SelectedItem="{Binding FrameRate, Mode=TwoWay}"
                                                       ItemsSource="{StaticResource VideoFrameRateOptions}"
-                                                      Width="140" IsEnabled="False"/>
+                                                      Width="120" IsEnabled="False"/>
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
@@ -495,23 +514,23 @@
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
-                                <!-- Width: controls the —–main-audio and —–add-audio channel target -->
+                                <!-- Width: channel downmix target — disabled pending ffmpeg implementation -->
                                 <GridViewColumn Header="Width" Width="110">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
                                             <ComboBox SelectedItem="{Binding Width, Mode=TwoWay}"
                                                       ItemsSource="{StaticResource AudioWidthOptions}"
-                                                      Width="100"/>
+                                                      Width="100" IsEnabled="False"/>
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
-                                <!-- Bit Rate: not currently used in the command (matches original); present for future use -->
+                                <!-- Bit Rate: used as -b:a when encoding; ignored when Format is Keep -->
                                 <GridViewColumn Header="Bit Rate (Kbps)" Width="130">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
                                             <ComboBox SelectedItem="{Binding BitRate, Mode=TwoWay}"
                                                       ItemsSource="{StaticResource AudioBitRateOptions}"
-                                                      Width="120" IsEnabled="False"/>
+                                                      Width="120"/>
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>

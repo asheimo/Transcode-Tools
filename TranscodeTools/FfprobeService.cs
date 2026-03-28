@@ -192,6 +192,7 @@ public static class FfprobeService
     private static TranscodeVideoTrack ParseTranscodeVideo(JsonNode s, int index)
     {
         var codec      = s["codec_name"]?.GetValue<string>() ?? "";
+        var pixFmt     = s["pix_fmt"]?.GetValue<string>()    ?? "";
         var resolution = BuildResolution(s);
         var fps        = BuildFps(s);
 
@@ -211,15 +212,17 @@ public static class FfprobeService
         return new TranscodeVideoTrack
         {
             OriginalTrackIndex = index,
+            CodecName    = codec,
+            PixelFormat  = pixFmt,
             // TrackInfo is the human-readable summary shown in the Transcode table.
             // Uses the raw resolution string (e.g. "1920x1080") for full detail.
             TrackInfo    = $"Video: {codec} {resolution} @ {fps}",
             // Resolution uses the mapped "p" value so it matches a dropdown item.
             Resolution   = resolutionItem,
             // Default to "hevc (default)" — hevc is the preferred output format.
-            // Selecting "h.264" will not add the —–hevc flag; hevc (default) will.
             OutputFormat = "hevc (default)",
-            FrameRate    = fps
+            FrameRate    = fps,
+            Preset       = "p4"
         };
     }
 

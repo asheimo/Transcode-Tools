@@ -1,7 +1,7 @@
 // ============================================================
 // CommandBuilder.cs
 // ------------------------------------------------------------
-// Builds the mkvmerge or other-transcode command line string
+// Builds the mkvmerge command (Remux) or ffmpeg command (Transcode)
 // from the current track table state.
 //
 // In the original VB.NET app this logic lived inside the large
@@ -150,11 +150,26 @@ public static class CommandBuilder
     }
 
     // ── Transcode command ─────────────────────────────────────────────
-    // Builds an other-transcode command from the Transcode track tables.
+    // Builds a direct ffmpeg command using the NVIDIA CUDA hardware pipeline.
     //
-    // other-transcode uses positional track numbers (1-based) rather than
-    // the raw ffprobe stream indexes that mkvmerge uses.
+    // Pipeline:
+    //   -hwaccel cuda -hwaccel_output_format cuda   keep pipeline on GPU
+    //   -c:v <cuvid decoder>                         hardware decode (app chooses)
+    //   -i "input.mkv"
+    //   -map 0:v:0 -c:v hevc_nvenc / h264_nvenc     hardware encode (user chooses)
+    //   -preset p1—–p7                               quality/speed (user chooses)
+    //   -highbitdepth true                           only when: output=hevc, source is 8-bit
+    //   -filter:v scale_cuda=format=p010le           only when: output=hevc, source is 8-bit
+    //   -map 0:a:N -c:a copy / eac3 / ac3           per audio track (user chooses)
+    //   -b:a:N <bitrate>k                            when encoding audio (user chooses)
+    //   -map 0:s:N -c:s copy                         per subtitle track
+    //   "output.mkv"
+    //
+    // Note: -colorspace:v bt709 is intentionally omitted — breaks the CUDA pipeline.
+    //
+    // Throws InvalidOperationException if no audio tracks exist.
     public static string BuildTranscodeCommand(
+        string outputDirectory,
         string movieFolder,
         string fileName,
         string inputDirectory,
@@ -162,104 +177,118 @@ public static class CommandBuilder
         ObservableCollection<TranscodeAudioTrack> audioTracks,
         ObservableCollection<TranscodeSubtitleTrack> subtitleTracks)
     {
-        var nameNoExt       = Path.GetFileNameWithoutExtension(fileName);
-        var inputFile       = Path.Combine(inputDirectory, movieFolder, fileName);
-        var transcodePath   = AppSettings.Instance.OtherTranscode_Path;
-        var options         = AppSettings.Instance.OtherTranscode_Options;
+        if (audioTracks.Count == 0)
+            throw new InvalidOperationException(
+                "No audio tracks found. The source file may be invalid.");
 
-        var sb = new StringBuilder();
+        var inputFile  = Path.Combine(inputDirectory, movieFolder, fileName);
+        var outputFile = Path.Combine(outputDirectory, movieFolder, fileName);
+        var ffmpegPath = AppSettings.Instance.FFmpeg_Path;
+        var video      = videoTracks.FirstOrDefault();
+        var sb         = new StringBuilder();
 
-        // ── Video options ─────────────────────────────────────────────
-        // Check if the user selected hevc output — adds —–hevc flag.
-        // other-transcode defaults to h264 if no format is specified.
-        var video = videoTracks.FirstOrDefault();
-        var outputFormat = "";
-        if (video != null &&
-            video.OutputFormat.Equals("hevc (default)", StringComparison.OrdinalIgnoreCase))
+        // ── Determine encode codec ────────────────────────────────────
+        // User's OutputFormat choice drives this.
+        var useHevc     = video == null ||
+            !video.OutputFormat.Equals("h.264", StringComparison.OrdinalIgnoreCase);
+        var encodeCodec = useHevc ? "hevc_nvenc" : "h264_nvenc";
+        var preset      = video?.Preset ?? "p5";
+
+        // ── Determine hardware decoder ────────────────────────────────
+        // App maps source codec_name to the appropriate NVDEC decoder.
+        var sourceCodec = video?.CodecName?.ToLowerInvariant() ?? "";
+        var hwDecoder = sourceCodec switch
         {
-            outputFormat = "--hevc ";
-        }
+            "h264"        => "h264_cuvid",
+            "hevc"        => "hevc_cuvid",
+            "mpeg2video"  => "mpeg2_cuvid",
+            "vc1"         => "vc1_cuvid",
+            "vp8"         => "vp8_cuvid",
+            "vp9"         => "vp9_cuvid",
+            "av1"         => "av1_cuvid",
+            _             => "h264_cuvid"   // fallback — flagged for future revisit
+        };
 
-        // ── Audio options ─────────────────────────────────────────────
-        // other-transcode uses 1-based track positions, not ffprobe indexes.
-        // --main-audio 1=<width>  sets the primary audio track
-        // --add-audio  N=<width>  adds additional tracks
-        //
-        // --eac3 and --pass-dts are global flags — they affect all tracks,
-        // not individual ones. We check whether any track needs each flag
-        // after the loop and append each at most once.
-        var audioSb     = new StringBuilder();
-        var needEac3    = false;
-        var needPassDts = false;
-        var position    = 1;
-
-        foreach (var t in audioTracks)
-        {
-            // "Keep" means copy without re-encoding — use "original" as width
-            var width = (t.Width.Equals("keep", StringComparison.OrdinalIgnoreCase) ||
-                         string.IsNullOrWhiteSpace(t.Width))
-                ? "original"
-                : t.Width.ToLower();
-
-            if (position == 1)
-                audioSb.Append($"--main-audio 1={width} ");
-            else
-                audioSb.Append($"--add-audio {position}={width} ");
-
-            // Check if any track is eac3 — --eac3 is a global flag, so we
-            // only need to add it once even if multiple tracks use eac3.
-            if (t.Format.Equals("eac3", StringComparison.OrdinalIgnoreCase))
-                needEac3 = true;
-
-            // Check if any DTS track is being kept — needs --pass-dts
-            if (t.Format.Contains("dts", StringComparison.OrdinalIgnoreCase) &&
-                (t.Width.Equals("keep", StringComparison.OrdinalIgnoreCase) ||
-                 string.IsNullOrWhiteSpace(t.Width)))
-            {
-                needPassDts = true;
-            }
-
-            position++;
-        }
-
-        // Append global audio flags once, after the loop
-        if (needEac3)
-            options = options.TrimEnd() + " --eac3";
-
-        if (needPassDts)
-            options = options.TrimEnd() + " --pass-dts";
-
-        // ── Subtitle options ──────────────────────────────────────────
-        // --burn-subtitle N  burns subtitle N into the video
-        // --add-subtitle  N  passes subtitle N through as a stream
-        var subSb    = new StringBuilder();
-        var subPos   = 1;
-
-        foreach (var t in subtitleTracks)
-        {
-            if (t.Burn)
-                subSb.Append($"--burn-subtitle {subPos} ");
-            else
-                subSb.Append($"--add-subtitle {subPos} ");
-            subPos++;
-        }
+        // ── Determine whether 10-bit conversion is needed ─────────────
+        // Only relevant when output is hevc. If the source pixel format
+        // already contains "10" (e.g. yuv420p10le) it is already 10-bit
+        // and no conversion is needed. 8-bit sources (e.g. yuv420p) need
+        // -highbitdepth true and scale_cuda to convert to p010le.
+        var sourcePixFmt  = video?.PixelFormat?.ToLowerInvariant() ?? "";
+        var sourceIs10bit = sourcePixFmt.Contains("10");
+        var needs10bit    = useHevc && !sourceIs10bit;
 
         // ── Assemble command ──────────────────────────────────────────
-        sb.Append($"\"{transcodePath}\"");
+        sb.Append($"\"{ffmpegPath}\"");
 
-        if (!string.IsNullOrWhiteSpace(options))
-            sb.Append($" {options.Trim()}");
+        // -y: overwrite output without prompting — required for unattended batch runs
+        // -loglevel error -stats: suppress informational noise, keep progress line
+        sb.Append(" -y -loglevel error -stats");
 
-        if (!string.IsNullOrEmpty(outputFormat))
-            sb.Append($" {outputFormat.Trim()}");
+        // -analyzeduration / -probesize: increases the amount of data ffmpeg reads
+        // before starting. Required for PGS subtitle streams in MKV where the
+        // dimensions are not declared in the container header (stream 4 in this case).
+        // Only affects startup analysis time, not encode speed.
+        sb.Append(" -analyzeduration 100M -probesize 100M");
 
-        if (audioSb.Length > 0)
-            sb.Append($" {audioSb.ToString().Trim()}");
+        // Hardware acceleration flags and decoder must come before -i
+        sb.Append(" -hwaccel cuda -hwaccel_output_format cuda");
+        sb.Append($" -c:v {hwDecoder}");
 
-        if (subSb.Length > 0)
-            sb.Append($" {subSb.ToString().Trim()}");
+        sb.Append($" -i \"{inputFile}\"");
 
-        sb.Append($" \"{inputFile}\"");
+        // Video encode
+        sb.Append(" -map 0:v:0");
+        sb.Append($" -c:v {encodeCodec}");
+        sb.Append($" -preset {preset}");
+
+        if (needs10bit)
+        {
+            // -highbitdepth true enables 10-bit output in hevc_nvenc.
+            // scale_cuda converts the decoded frames to p010le (10-bit)
+            // on the GPU before encoding, keeping the full pipeline on device.
+            sb.Append(" -highbitdepth true");
+            sb.Append(" -filter:v scale_cuda=format=p010le");
+        }
+
+        // ── Audio — per track ─────────────────────────────────────────
+        // ffmpeg -map 0:a:N uses 0-based audio-relative index.
+        // We iterate all tracks; the user's Format dropdown determines
+        // copy vs encode. BitRate is used when encoding.
+        for (int i = 0; i < audioTracks.Count; i++)
+        {
+            var t      = audioTracks[i];
+            var format = t.Format.ToLowerInvariant();
+
+            sb.Append($" -map 0:a:{i}");
+
+            if (format == "keep" || string.IsNullOrWhiteSpace(format))
+            {
+                sb.Append($" -c:a:{i} copy");
+            }
+            else
+            {
+                // User has chosen a target codec (eac3 or ac3)
+                sb.Append($" -c:a:{i} {format}");
+
+                // Append bitrate if the user chose one
+                var br = t.BitRate;
+                if (!string.IsNullOrWhiteSpace(br) &&
+                    !br.Equals("Keep", StringComparison.OrdinalIgnoreCase))
+                {
+                    sb.Append($" -b:a:{i} {br}k");
+                }
+            }
+        }
+
+        // ── Subtitles — per track ─────────────────────────────────────
+        // All subtitle tracks are copied. Burn via overlay_cuda is backlog.
+        for (int i = 0; i < subtitleTracks.Count; i++)
+        {
+            sb.Append($" -map 0:s:{i} -c:s:{i} copy");
+        }
+
+        sb.Append($" \"{outputFile}\"");
 
         return sb.ToString();
     }

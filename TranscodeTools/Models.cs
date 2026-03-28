@@ -197,6 +197,16 @@ public class TranscodeVideoTrack : ObservableBase
 {
     public int OriginalTrackIndex { get; set; }
 
+    // CodecName stores the raw ffprobe codec_name (e.g. "h264", "hevc", "mpeg2video").
+    // Used by BuildTranscodeCommand to select the correct NVDEC hardware decoder.
+    // Not shown in the UI.
+    public string CodecName { get; set; } = "";
+
+    // PixelFormat stores the raw ffprobe pix_fmt (e.g. "yuv420p", "yuv420p10le").
+    // Used by BuildTranscodeCommand to decide whether -highbitdepth and
+    // scale_cuda=format=p010le are needed. Not shown in the UI.
+    public string PixelFormat { get; set; } = "";
+
     private string _trackInfo = "";
     public string TrackInfo
     {
@@ -223,6 +233,16 @@ public class TranscodeVideoTrack : ObservableBase
     {
         get => _frameRate;
         set { _frameRate = value; OnPropertyChanged(); }
+    }
+
+    // Preset controls the nvenc quality/speed trade-off.
+    // p1 = fastest/lowest quality, p7 = slowest/highest quality.
+    // Defaults to p4 — matches hevc_nvenc default and gives good speed.
+    private string _preset = "p4";
+    public string Preset
+    {
+        get => _preset;
+        set { _preset = value; OnPropertyChanged(); }
     }
 }
 

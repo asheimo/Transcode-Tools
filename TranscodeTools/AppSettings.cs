@@ -125,13 +125,14 @@ public sealed class AppSettings
     // Helper to check if all required tool paths have been set.
     // Returns true only if every mandatory path has a value.
     // Used on startup and when the user clicks OK in UserPreferences.
+    // Note: OtherTranscode_Path and Ruby_Path are retained in settings for
+    // backwards compatibility but are no longer required — transcode now
+    // calls ffmpeg directly using FFmpeg_Path.
     public bool AllPathsSet() =>
-        !string.IsNullOrWhiteSpace(MPV_Path)            &&
-        !string.IsNullOrWhiteSpace(SubtitleEdit_Path)   &&
-        !string.IsNullOrWhiteSpace(FFmpeg_Path)         &&
-        !string.IsNullOrWhiteSpace(FFprobe_Path)        &&
-        !string.IsNullOrWhiteSpace(OtherTranscode_Path) &&
-        !string.IsNullOrWhiteSpace(MKVPropEdit_Path)    &&
-        !string.IsNullOrWhiteSpace(MKVMerge_Path)       &&
-        !string.IsNullOrWhiteSpace(Ruby_Path);
+        !string.IsNullOrWhiteSpace(MPV_Path)          &&
+        !string.IsNullOrWhiteSpace(SubtitleEdit_Path) &&
+        !string.IsNullOrWhiteSpace(FFmpeg_Path)       &&
+        !string.IsNullOrWhiteSpace(FFprobe_Path)      &&
+        !string.IsNullOrWhiteSpace(MKVPropEdit_Path)  &&
+        !string.IsNullOrWhiteSpace(MKVMerge_Path);
 }

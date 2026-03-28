@@ -277,28 +277,56 @@ public partial class RunRemux : Window
             var command = File.ReadAllText(settingsFile).Trim();
             if (string.IsNullOrWhiteSpace(command)) return;
 
-            // Split the command into executable and arguments.
-            // The executable is the first quoted string in the command.
-            // e.g. "C:\bin\mkvmerge.exe" --output ...
-            string exe, args;
-            if (command.StartsWith("\""))
-            {
-                var endQuote = command.IndexOf('"', 1);
-                exe  = command.Substring(1, endQuote - 1);
-                args = command.Substring(endQuote + 1).Trim();
-            }
-            else
-            {
-                var firstSpace = command.IndexOf(' ');
-                exe  = firstSpace > 0 ? command.Substring(0, firstSpace) : command;
-                args = firstSpace > 0 ? command.Substring(firstSpace + 1).Trim() : "";
-            }
-
             // Ensure output folder exists
             var outputFolder = Path.Combine(_outputDirectory, file.FolderName);
             Directory.CreateDirectory(outputFolder);
 
-            await RunProcessAsync(exe, args);
+            string exe, args;
+
+            if (_isTranscodeMode)
+            {
+                // ── Transcode: the saved command is a complete ffmpeg invocation ──
+                // Format: "C:\path\ffmpeg.exe" -hwaccel cuda ... "input.mkv" "output.mkv"
+                // Split the first quoted token as the executable, pass the rest as args.
+                // No working directory override needed — the output path is explicit
+                // in the command rather than written to the current directory.
+                if (command.StartsWith("\""))
+                {
+                    var endQuote = command.IndexOf('"', 1);
+                    exe  = command.Substring(1, endQuote - 1);
+                    args = command.Substring(endQuote + 1).Trim();
+                }
+                else
+                {
+                    var firstSpace = command.IndexOf(' ');
+                    exe  = firstSpace > 0 ? command.Substring(0, firstSpace) : command;
+                    args = firstSpace > 0 ? command.Substring(firstSpace + 1).Trim() : "";
+                }
+
+                // Log a per-track summary before starting the encode
+                await LogTranscodeSummaryAsync(command);
+
+                await RunProcessAsync(exe, args);
+            }
+            else
+            {
+                // ── Remux: split the first quoted token as the executable ──
+                // e.g. "C:\bin\mkvmerge.exe" --output "..." "input.mkv"
+                if (command.StartsWith("\""))
+                {
+                    var endQuote = command.IndexOf('"', 1);
+                    exe  = command.Substring(1, endQuote - 1);
+                    args = command.Substring(endQuote + 1).Trim();
+                }
+                else
+                {
+                    var firstSpace = command.IndexOf(' ');
+                    exe  = firstSpace > 0 ? command.Substring(0, firstSpace) : command;
+                    args = firstSpace > 0 ? command.Substring(firstSpace + 1).Trim() : "";
+                }
+
+                await RunProcessAsync(exe, args);
+            }
         }
         else
         {
@@ -313,13 +341,159 @@ public partial class RunRemux : Window
         }
     }
 
+    // ── Transcode summary logger ──────────────────────────────────────
+    // Runs ffprobe on the input file and writes a per-track summary to
+    // the log before ffmpeg starts. Cross-references the saved command
+    // to show what decision was made for each track (copy vs encode).
+    //
+    // Example output:
+    //   Input:    Casino Royale (2006).mkv
+    //   Video:    0, h264, 1920x1080, 23.98fps → hevc_nvenc, preset p4
+    //   Audio:    1, DTS 5.1 768k → copy
+    //   Audio:    2, DTS-HD MA 5.1 → copy
+    //   Audio:    3, AC3 stereo 224k → copy
+    //   Subtitle: 4, PGS → copy
+    //   Subtitle: 5, PGS → copy
+    //   Output:   F:\Transcoded\Casino Royale (2006)\Casino Royale (2006).mkv
+    private async Task LogTranscodeSummaryAsync(string command)
+    {
+        try
+        {
+            // ── Extract input and output paths from command ────────────
+            // Input path follows -i, output path is the last quoted token.
+            var inputPath  = ExtractQuotedArg(command, "-i");
+            var outputPath = ExtractLastQuotedArg(command);
+
+            if (string.IsNullOrWhiteSpace(inputPath)) return;
+
+            AppendLog($"Input:    {Path.GetFileName(inputPath)}");
+
+            // ── Probe the input file ──────────────────────────────────
+            var probe = await FfprobeService.ProbeFileAsync(inputPath);
+
+            // ── Parse command decisions ───────────────────────────────
+            // Read encode codec (after -i), preset, and per-track decisions.
+            var tokens = command.Split(' ');
+
+            // Video encode codec: find -c:v after -i
+            var encodeCodec = "hevc_nvenc";
+            var preset      = "p4";
+            var inputIndex  = Array.IndexOf(tokens, "-i");
+            if (inputIndex >= 0)
+            {
+                for (int i = inputIndex + 1; i < tokens.Length - 1; i++)
+                {
+                    if (tokens[i] == "-c:v") { encodeCodec = tokens[i + 1]; break; }
+                }
+            }
+            var presetIndex = Array.IndexOf(tokens, "-preset");
+            if (presetIndex >= 0 && presetIndex + 1 < tokens.Length)
+                preset = tokens[presetIndex + 1];
+
+            // ── Video summary ─────────────────────────────────────────
+            var video = probe.RemuxVideo.FirstOrDefault();
+            if (video != null)
+            {
+                AppendLog($"Video:    {video.OriginalTrackIndex}, {video.VideoFormat}, " +
+                          $"{video.Resolution}, {video.Fps}fps → {encodeCodec}, preset {preset}");
+            }
+
+            // ── Audio summary — per track ─────────────────────────────
+            // Build a map of audio-relative index → codec decision from command.
+            var audioDecisions = new Dictionary<int, string>();
+            var audioBitrates  = new Dictionary<int, string>();
+            for (int i = 0; i < tokens.Length - 1; i++)
+            {
+                if (tokens[i].StartsWith("-c:a:") &&
+                    int.TryParse(tokens[i].Substring(5), out var caIdx))
+                    audioDecisions[caIdx] = tokens[i + 1];
+
+                if (tokens[i].StartsWith("-b:a:") &&
+                    int.TryParse(tokens[i].Substring(5), out var baIdx))
+                    audioBitrates[baIdx] = tokens[i + 1];
+            }
+
+            var allAudio = probe.RemuxAudio
+                .OrderBy(t => t.OriginalTrackIndex)
+                .ToList();
+
+            for (int i = 0; i < allAudio.Count; i++)
+            {
+                var t        = allAudio[i];
+                var decision = audioDecisions.TryGetValue(i, out var d) ? d : "copy";
+                var br       = audioBitrates.TryGetValue(i, out var b)  ? $" {b}"  : "";
+                var codec    = string.IsNullOrWhiteSpace(t.AudioFormat) ? "?" : t.AudioFormat;
+                var width    = string.IsNullOrWhiteSpace(t.Width)       ? "" : $" {t.Width}";
+                var srcBr    = string.IsNullOrWhiteSpace(t.BitRate)     ? "" : $" {t.BitRate}k";
+
+                AppendLog($"Audio:    {t.OriginalTrackIndex}, {codec}{width}{srcBr} → {decision}{br}");
+            }
+
+            // ── Subtitle summary — per track ──────────────────────────
+            var allSubs = probe.RemuxSubtitle
+                .OrderBy(t => t.OriginalTrackIndex)
+                .ToList();
+
+            for (int i = 0; i < allSubs.Count; i++)
+            {
+                var t     = allSubs[i];
+                var codec = string.IsNullOrWhiteSpace(t.SubtitleFormat) ? "?" : t.SubtitleFormat;
+                AppendLog($"Subtitle: {t.OriginalTrackIndex}, {codec} → copy");
+            }
+
+            // ── Output path ───────────────────────────────────────────
+            if (!string.IsNullOrWhiteSpace(outputPath))
+                AppendLog($"Output:   {outputPath}");
+
+            AppendLog("");  // blank line before progress output
+        }
+        catch
+        {
+            // If probing fails for any reason, skip the summary and
+            // proceed with the encode — don't block processing.
+        }
+    }
+
+    // Extracts the quoted argument that follows a named flag in a command string.
+    // e.g. ExtractQuotedArg(command, "-i") returns the path after -i.
+    private static string ExtractQuotedArg(string command, string flag)
+    {
+        var flagIndex = command.IndexOf(flag + " \"", StringComparison.OrdinalIgnoreCase);
+        if (flagIndex < 0) return "";
+
+        var start = command.IndexOf('"', flagIndex + flag.Length);
+        if (start < 0) return "";
+
+        var end = command.IndexOf('"', start + 1);
+        if (end < 0) return "";
+
+        return command.Substring(start + 1, end - start - 1);
+    }
+
+    // Extracts the last quoted argument in a command string (the output path).
+    private static string ExtractLastQuotedArg(string command)
+    {
+        var lastEnd   = command.LastIndexOf('"');
+        if (lastEnd < 0) return "";
+
+        var lastStart = command.LastIndexOf('"', lastEnd - 1);
+        if (lastStart < 0) return "";
+
+        return command.Substring(lastStart + 1, lastEnd - lastStart - 1);
+    }
+
     // ── Run an external process and stream output to the log ──────────
     // Uses async/await so the UI stays responsive throughout.
     // Output lines are appended to the log on the UI thread.
     // Progress lines (frame=, Progress:, ending with %) update the
     // last line in place rather than appending, matching the original
     // app's intent but implemented correctly with async.
-    private async Task RunProcessAsync(string exe, string args)
+    //
+    // workingDirectory is optional — only needed for Transcode mode,
+    // where other-transcode writes its output .mkv to the current
+    // working directory rather than using an explicit --output flag.
+    private async Task RunProcessAsync(string exe, string args,
+                                       string? workingDirectory = null)
     {
         var psi = new ProcessStartInfo
         {
@@ -330,6 +504,9 @@ public partial class RunRemux : Window
             UseShellExecute        = false,
             CreateNoWindow         = true
         };
+
+        if (!string.IsNullOrWhiteSpace(workingDirectory))
+            psi.WorkingDirectory = workingDirectory;
 
         _currentProcess = new Process { StartInfo = psi };
 
