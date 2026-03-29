@@ -168,6 +168,18 @@
 
                 <!-- Right-aligned save button -->
                 <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
+                    <Button x:Name="ViewRemuxCommandBtn"
+                            Content="View Command"
+                            Style="{StaticResource FlatButton}"
+                            IsEnabled="False"
+                            Margin="0,0,8,0"
+                            Click="ViewCommand_Click"/>
+                    <Button x:Name="ViewTranscodeCommandBtn"
+                            Content="View Command"
+                            Style="{StaticResource FlatButton}"
+                            Visibility="Collapsed"
+                            Margin="0,0,8,0"
+                            Click="ViewCommand_Click"/>
                     <Button x:Name="SaveRemuxBtn"
                             Content="Save Remux Settings"
                             Style="{StaticResource AccentButton}"
@@ -241,19 +253,35 @@
                     <ColumnDefinition Width="3*"/>
                 </Grid.ColumnDefinitions>
 
-                <!-- Left: flat list of movie folders -->
+                <!-- Left: folder/show browser -->
                 <Border Grid.Column="0"
                         Background="{DynamicResource PanelBg}"
                         BorderBrush="{DynamicResource BorderColor}"
                         BorderThickness="1"
                         CornerRadius="4">
-                    <ListBox x:Name="FolderList"
-                             Background="Transparent"
-                             BorderThickness="0"
-                             Foreground="{DynamicResource ForegroundColor}"
-                             FontSize="13"
-                             ScrollViewer.VerticalScrollBarVisibility="Auto"
-                             SelectionChanged="FolderList_SelectionChanged"/>
+                    <TreeView x:Name="FolderList"
+                              Background="Transparent"
+                              BorderThickness="0"
+                              Foreground="{DynamicResource ForegroundColor}"
+                              FontSize="13"
+                              ScrollViewer.VerticalScrollBarVisibility="Auto"
+                              SelectedItemChanged="FolderList_SelectedItemChanged">
+                        <TreeView.Resources>
+                            <!-- Movie folder: leaf node, no children -->
+                            <DataTemplate DataType="{x:Type local:FolderNode}">
+                                <TextBlock Text="{Binding DisplayName}" Padding="2,1"/>
+                            </DataTemplate>
+                            <!-- TV show: expandable node with season children -->
+                            <HierarchicalDataTemplate DataType="{x:Type local:ShowNode}"
+                                                      ItemsSource="{Binding Children}">
+                                <TextBlock Text="{Binding DisplayName}" Padding="2,1"/>
+                            </HierarchicalDataTemplate>
+                            <!-- Season: leaf node inside a show -->
+                            <DataTemplate DataType="{x:Type local:SeasonNode}">
+                                <TextBlock Text="{Binding DisplayName}" Padding="2,1"/>
+                            </DataTemplate>
+                        </TreeView.Resources>
+                    </TreeView>
                 </Border>
 
                 <!-- Right: TreeView of files within the selected folder -->

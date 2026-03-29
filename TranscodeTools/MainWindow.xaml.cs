@@ -99,9 +99,16 @@ public partial class MainWindow : Window
         var btnRemux = new[] { OpenInMPVBtn, OpenInSubtitleEditBtn, OpenFolderBtn };
         if (SaveTranscodeBtn == null) return;
 
-        SaveRemuxBtn.Visibility     = _isTranscodeMode ? Visibility.Collapsed : Visibility.Visible;
-        SaveTranscodeBtn.Visibility = _isTranscodeMode ? Visibility.Visible   : Visibility.Collapsed;
-        RunMenuItem.Header          = _isTranscodeMode ? "Run Transcode"       : "Run Remux";
+        SaveRemuxBtn.Visibility            = _isTranscodeMode ? Visibility.Collapsed : Visibility.Visible;
+        SaveTranscodeBtn.Visibility        = _isTranscodeMode ? Visibility.Visible   : Visibility.Collapsed;
+        ViewRemuxCommandBtn.Visibility     = _isTranscodeMode ? Visibility.Collapsed : Visibility.Visible;
+        ViewTranscodeCommandBtn.Visibility = _isTranscodeMode ? Visibility.Visible   : Visibility.Collapsed;
+        RunMenuItem.Header                 = _isTranscodeMode ? "Run Transcode"       : "Run Remux";
+
+        // Remux View Command is only valid when a settings file exists.
+        // Reset to disabled on mode switch — it will be re-enabled when a
+        // leaf with a green background is selected.
+        ViewRemuxCommandBtn.IsEnabled = false;
 
         foreach (var btn in btnRemux)
             if (btn != null)
@@ -165,8 +172,49 @@ public partial class MainWindow : Window
                                !name.Equals("Transcode", StringComparison.OrdinalIgnoreCase))
                 .OrderBy(name => name);
 
-            foreach (var folder in folders)
-                FolderList.Items.Add(folder);
+            foreach (var folderName in folders)
+            {
+                if (folderName == null) continue;
+
+                var folderPath = Path.Combine(rootPath, folderName);
+
+                // Detect whether this is a TV show (contains subfolders)
+                // or a movie (contains .mkv files directly).
+                // A folder with subfolders is treated as a TV show — its
+                // subfolders are assumed to be seasons.
+                var subFolders = Directory.GetDirectories(folderPath);
+
+                if (subFolders.Length > 0)
+                {
+                    // ── TV show node ──────────────────────────────────
+                    var showNode = new ShowNode { DisplayName = folderName };
+
+                    foreach (var seasonPath in subFolders.OrderBy(s => s))
+                    {
+                        var seasonName = Path.GetFileName(seasonPath);
+                        if (seasonName == null) continue;
+
+                        showNode.Children.Add(new SeasonNode
+                        {
+                            DisplayName = seasonName,
+                            // FolderPath is relative to input directory —
+                            // "Show Name\Season 01" — used as _selectedMovieFolder
+                            FolderPath  = Path.Combine(folderName, seasonName)
+                        });
+                    }
+
+                    FolderList.Items.Add(showNode);
+                }
+                else
+                {
+                    // ── Movie folder node ─────────────────────────────
+                    FolderList.Items.Add(new FolderNode
+                    {
+                        DisplayName = folderName,
+                        FolderPath  = folderName
+                    });
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -176,21 +224,32 @@ public partial class MainWindow : Window
     }
 
     // ── Folder selected → populate the TreeView ──────────────────────
-    private void FolderList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    // Handles selection of both FolderNode (movie) and SeasonNode (TV season).
+    // ShowNode clicks are ignored — user must select a season.
+    private void FolderList_SelectedItemChanged(object sender,
+        RoutedPropertyChangedEventArgs<object> e)
     {
-        if (FolderList.SelectedItem is not string folderName) return;
+        // Determine the folder path relative to input directory
+        string? folderPath = e.NewValue switch
+        {
+            FolderNode f  => f.FolderPath,
+            SeasonNode s  => s.FolderPath,
+            _             => null   // ShowNode or anything else — ignore
+        };
 
-        _selectedMovieFolder = folderName;
+        if (folderPath == null) return;
+
+        _selectedMovieFolder = folderPath;
         FileTree.Items.Clear();
         ClearTrackTables();
         HideSelectedFileBar();
 
-        var folderPath = Path.Combine(_inputDirectory, folderName);
+        var fullFolderPath = Path.Combine(_inputDirectory, folderPath);
 
         try
         {
             // Get all .mkv files in the folder, sorted alphabetically
-            var files = Directory.GetFiles(folderPath, "*.mkv")
+            var files = Directory.GetFiles(fullFolderPath, "*.mkv")
                 .Select(Path.GetFileName)
                 .Where(f => f != null)
                 .OrderBy(f => f)
@@ -203,16 +262,9 @@ public partial class MainWindow : Window
             {
                 if (fileName == null) continue;
 
-                // Strip the .mkv extension for display and analysis
-                // Path.GetFileNameWithoutExtension handles this cleanly
                 var nameNoExt = Path.GetFileNameWithoutExtension(fileName);
 
                 // Determine the category by splitting on the LAST dash.
-                // This fixes the original bug — "Ian Fleming - Secret Road-featurette"
-                // was broken because the old code split on the first dash.
-                //
-                // LastIndexOf returns the position of the last '-' character.
-                // If no dash exists, it returns -1.
                 var lastDash = nameNoExt.LastIndexOf('-');
 
                 string? category = null;
@@ -220,22 +272,20 @@ public partial class MainWindow : Window
 
                 if (lastDash > 0)
                 {
-                    // Substring(lastDash + 1) gets everything after the last dash
                     var suffix = nameNoExt.Substring(lastDash + 1);
 
                     if (KnownCategories.Contains(suffix))
                     {
-                        // It's an extra — suffix is the category, display name is everything before the dash
                         category    = suffix.ToLowerInvariant();
                         displayName = nameNoExt.Substring(0, lastDash);
                     }
-                    // If suffix is not a known category, treat the whole name as the display name
-                    // (e.g. "Ian Fleming - Secret Road To Paradise" with no type suffix)
                 }
 
-                // Check if a settings file already exists for this file
-                var settingsPath = Path.Combine(_inputDirectory, modeFolder, folderName,
-                    nameNoExt + ".txt");
+                // Check if a settings file already exists for this file.
+                // For TV: folderPath is "Show\Season 01" so the settings path
+                // mirrors that structure under the Remux/Transcode folder.
+                var settingsPath = Path.Combine(_inputDirectory, modeFolder,
+                    folderPath, nameNoExt + ".txt");
                 var hasSettings = File.Exists(settingsPath);
 
                 var leaf = new FileLeafNode
@@ -243,7 +293,6 @@ public partial class MainWindow : Window
                     DisplayName = displayName,
                     FileName    = fileName,
                     GroupKey    = category,
-                    // Green background if settings exist, transparent if not
                     Background  = hasSettings
                         ? System.Windows.Media.Brushes.Green
                         : System.Windows.Media.Brushes.Transparent
@@ -251,14 +300,10 @@ public partial class MainWindow : Window
 
                 if (category == null)
                 {
-                    // Root-level item — plain movie file, no category
-                    // Insert at position 0 so the main movie appears at the top,
-                    // same behaviour as the original app
                     FileTree.Items.Insert(0, leaf);
                 }
                 else
                 {
-                    // Find or create the group node for this category
                     var group = FindOrCreateGroup(category);
                     group.Children.Add(leaf);
                 }
@@ -347,6 +392,13 @@ public partial class MainWindow : Window
         // Only respond to leaf nodes (actual files)
         if (e.NewValue is not FileLeafNode leaf) return;
 
+        // The leaf's Background is Green when a settings file exists (set during
+        // tree population and after a successful save). Drive the Remux View Command
+        // button enabled state from this — it should only be clickable when there
+        // is actually a saved command to read.
+        ViewRemuxCommandBtn.IsEnabled =
+            leaf.Background == System.Windows.Media.Brushes.Green;
+
         var fullPath = Path.Combine(_inputDirectory, _selectedMovieFolder, leaf.FileName);
         ShowSelectedFileBar(Path.GetFileNameWithoutExtension(leaf.FileName));
 
@@ -395,6 +447,14 @@ public partial class MainWindow : Window
             // previously saved track selections and order.
             if (FileTree.SelectedItem is FileLeafNode leaf)
                 LoadSettingsForFile(leaf);
+
+            // ── Auto-select single audio track ────────────────────────
+            // If there is exactly one audio track and no settings were loaded
+            // (i.e. the track is still unselected), select it automatically.
+            // We only do this for a single track — more than one requires the
+            // user to make an explicit choice to avoid unintended selections.
+            if (RemuxAudioTracks.Count == 1 && !RemuxAudioTracks[0].IsSelected)
+                RemuxAudioTracks[0].IsSelected = true;
         }
         catch (InvalidOperationException)
         {
@@ -886,12 +946,136 @@ public partial class MainWindow : Window
             // Update the TreeView node to green to show settings exist.
             // This matches the original app's visual feedback.
             leaf.Background = System.Windows.Media.Brushes.Green;
+
+            // A settings file now exists — enable the Remux View Command button.
+            if (!_isTranscodeMode)
+                ViewRemuxCommandBtn.IsEnabled = true;
         }
         catch (Exception ex)
         {
             MessageBox.Show($"Could not save settings file:\n{ex.Message}",
                 "Save Error", MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    // ── View Command ──────────────────────────────────────────────────
+    // Remux: reads the saved .txt settings file (button is disabled when
+    //        no file exists, so we can assume it's there).
+    // Transcode: reads the saved .txt file if one exists, otherwise
+    //            builds the command from current UI state.
+    private void ViewCommand_Click(object sender, RoutedEventArgs e)
+    {
+        if (FileTree.SelectedItem is not FileLeafNode leaf) return;
+
+        var modeFolder   = _isTranscodeMode ? "Transcode" : "Remux";
+        var nameNoExt    = Path.GetFileNameWithoutExtension(leaf.FileName);
+        var settingsFile = Path.Combine(_inputDirectory, modeFolder,
+                               _selectedMovieFolder, nameNoExt + ".txt");
+
+        string command;
+
+        if (File.Exists(settingsFile))
+        {
+            // Ground truth — read exactly what will be executed.
+            command = File.ReadAllText(settingsFile, System.Text.Encoding.UTF8);
+        }
+        else
+        {
+            // Transcode only: no settings file yet, build from current UI state.
+            if (string.IsNullOrWhiteSpace(OutputDirectoryBox.Text))
+            {
+                MessageBox.Show("No output directory chosen.",
+                    "View Command", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            try
+            {
+                command = CommandBuilder.BuildTranscodeCommand(
+                    OutputDirectoryBox.Text, _selectedMovieFolder, leaf.FileName,
+                    _inputDirectory, TranscodeVideoTracks, TranscodeAudioTracks,
+                    TranscodeSubtitleTracks);
+            }
+            catch (InvalidOperationException ex)
+            {
+                MessageBox.Show(ex.Message, "View Command",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+        }
+
+        ShowCommandPreview(command, leaf.FileName);
+    }
+
+    // Opens a small owned window showing the full command string in a
+    // selectable, word-wrapped TextBox with a Copy button.
+    private void ShowCommandPreview(string command, string fileName)
+    {
+        // ── Window shell ──────────────────────────────────────────────
+        var win = new Window
+        {
+            Title           = $"Command — {fileName}",
+            Width           = 800,
+            Height          = 300,
+            MinWidth        = 400,
+            MinHeight       = 160,
+            Owner           = this,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Background      = (System.Windows.Media.Brush)
+                                  FindResource("WindowBg"),
+            ResizeMode      = ResizeMode.CanResizeWithGrip,
+            ShowInTaskbar   = false
+        };
+
+        // ── Layout ────────────────────────────────────────────────────
+        var grid = new Grid { Margin = new Thickness(12) };
+        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(8) });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+        // ── Command TextBox ───────────────────────────────────────────
+        // IsReadOnly keeps the text unchanged; IsReadOnlyCaretVisible + PART_ContentHost
+        // together ensure the caret appears and text remains selectable/copyable.
+        var textBox = new TextBox
+        {
+            Text              = command,
+            IsReadOnly        = true,
+            TextWrapping      = TextWrapping.Wrap,
+            VerticalScrollBarVisibility   = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            FontFamily        = new System.Windows.Media.FontFamily("Consolas"),
+            FontSize          = 12,
+            Foreground        = (System.Windows.Media.Brush)FindResource("ForegroundColor"),
+            Background        = (System.Windows.Media.Brush)FindResource("SurfaceBg"),
+            BorderBrush       = (System.Windows.Media.Brush)FindResource("BorderColor"),
+            BorderThickness   = new Thickness(1),
+            Padding           = new Thickness(8),
+            IsReadOnlyCaretVisible = true
+        };
+        Grid.SetRow(textBox, 0);
+
+        // ── Copy button ───────────────────────────────────────────────
+        var copyBtn = new Button
+        {
+            Content             = "Copy to Clipboard",
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Style               = (Style)FindResource("AccentButton")
+        };
+        copyBtn.Click += (_, _) =>
+        {
+            Clipboard.SetText(command);
+            copyBtn.Content = "Copied!";
+        };
+        Grid.SetRow(copyBtn, 2);
+
+        grid.Children.Add(textBox);
+        grid.Children.Add(copyBtn);
+        win.Content = grid;
+
+        // Select all text immediately so the user can Ctrl+C without clicking
+        win.Loaded += (_, _) => textBox.SelectAll();
+
+        win.ShowDialog();
     }
 
     // Returns the full path to the currently selected file in the TreeView,

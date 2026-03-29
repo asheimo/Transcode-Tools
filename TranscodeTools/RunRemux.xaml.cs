@@ -56,9 +56,10 @@ public partial class RunRemux : Window
     }
 
     // ── Populate the TreeView ─────────────────────────────────────────
-    // In folders-only mode (default): one checkbox node per movie folder.
-    // In show-files mode: each folder node expands to show its .mkv files,
-    // with green background on files that have a settings file saved.
+    // Movies appear as single checkbox nodes.
+    // TV shows appear as expandable nodes with season children.
+    // In show-files mode, each selectable node further expands to show
+    // its .mkv files with green background if settings exist.
     private void PopulateFolderTree()
     {
         FolderTree.Items.Clear();
@@ -66,8 +67,8 @@ public partial class RunRemux : Window
         if (string.IsNullOrWhiteSpace(_inputDirectory) ||
             !Directory.Exists(_inputDirectory)) return;
 
-        var modeFolder  = _isTranscodeMode ? "Transcode" : "Remux";
-        var showFiles   = ShowFilesCheckBox.IsChecked == true;
+        var modeFolder = _isTranscodeMode ? "Transcode" : "Remux";
+        var showFiles  = ShowFilesCheckBox.IsChecked == true;
 
         try
         {
@@ -82,9 +83,47 @@ public partial class RunRemux : Window
             {
                 if (folderName == null) continue;
 
-                var folderNode = new RunFolderNode { FolderName = folderName };
-                var treeItem   = BuildFolderTreeItem(folderNode, folderName, modeFolder, showFiles);
-                FolderTree.Items.Add(treeItem);
+                var folderPath  = Path.Combine(_inputDirectory, folderName);
+                var subFolders  = Directory.GetDirectories(folderPath);
+
+                if (subFolders.Length > 0)
+                {
+                    // ── TV show: non-selectable header with season children ──
+                    var showItem = new TreeViewItem
+                    {
+                        Header = new TextBlock
+                        {
+                            Text       = folderName,
+                            FontSize   = 13,
+                            Foreground = (System.Windows.Media.Brush)Application.Current
+                                            .FindResource("ForegroundColor")
+                        }
+                    };
+
+                    foreach (var seasonPath in subFolders.OrderBy(s => s))
+                    {
+                        var seasonName = Path.GetFileName(seasonPath);
+                        if (seasonName == null) continue;
+
+                        // FolderPath for TV is "Show\Season" relative to input
+                        var relativePath = Path.Combine(folderName, seasonName);
+                        var seasonNode   = new RunFolderNode { FolderName = relativePath };
+                        var seasonItem   = BuildFolderTreeItem(
+                            seasonNode, relativePath, seasonName, modeFolder, showFiles);
+
+                        showItem.Items.Add(seasonItem);
+                    }
+
+                    FolderTree.Items.Add(showItem);
+                }
+                else
+                {
+                    // ── Movie: single selectable checkbox node ────────────
+                    var folderNode = new RunFolderNode { FolderName = folderName };
+                    var treeItem   = BuildFolderTreeItem(
+                        folderNode, folderName, folderName, modeFolder, showFiles);
+                    FolderTree.Items.Add(treeItem);
+                }
             }
         }
         catch (Exception ex)
@@ -93,14 +132,15 @@ public partial class RunRemux : Window
         }
     }
 
-    // Builds a TreeViewItem for a folder, optionally with file children.
-    private TreeViewItem BuildFolderTreeItem(RunFolderNode node, string folderName,
-                                              string modeFolder, bool showFiles)
+    // Builds a TreeViewItem for a selectable folder (movie or TV season).
+    // folderRelativePath — path relative to input dir (e.g. "Show\Season 01")
+    // displayName        — label shown on the checkbox (e.g. "Season 01")
+    private TreeViewItem BuildFolderTreeItem(RunFolderNode node, string folderRelativePath,
+                                              string displayName, string modeFolder, bool showFiles)
     {
-        // ── Folder node ───────────────────────────────────────────────
         var checkBox = new CheckBox
         {
-            Content    = folderName,
+            Content    = displayName,
             FontSize   = 13,
             Foreground = (Brush)Application.Current.FindResource("ForegroundColor"),
             Tag        = node
@@ -110,17 +150,17 @@ public partial class RunRemux : Window
 
         var treeItem = new TreeViewItem
         {
-            Header  = checkBox,
-            Tag     = node
+            Header = checkBox,
+            Tag    = node
         };
 
         if (!showFiles) return treeItem;
 
         // ── File children (show files mode only) ─────────────────────
-        var folderPath = Path.Combine(_inputDirectory, folderName);
+        var fullPath = Path.Combine(_inputDirectory, folderRelativePath);
         try
         {
-            var files = Directory.GetFiles(folderPath, "*.mkv")
+            var files = Directory.GetFiles(fullPath, "*.mkv")
                 .Select(Path.GetFileName)
                 .Where(f => f != null)
                 .OrderBy(f => f);
@@ -131,12 +171,12 @@ public partial class RunRemux : Window
 
                 var nameNoExt    = Path.GetFileNameWithoutExtension(fileName);
                 var settingsFile = Path.Combine(_inputDirectory, modeFolder,
-                                       folderName, nameNoExt + ".txt");
+                                       folderRelativePath, nameNoExt + ".txt");
                 var hasSettings  = File.Exists(settingsFile);
 
-                var fileNode    = new RunFileNode
+                var fileNode = new RunFileNode
                 {
-                    FolderName  = folderName,
+                    FolderName  = folderRelativePath,
                     FileName    = fileName,
                     HasSettings = hasSettings
                 };
@@ -146,7 +186,6 @@ public partial class RunRemux : Window
                     Content    = nameNoExt,
                     FontSize   = 12,
                     Foreground = (Brush)Application.Current.FindResource("ForegroundColor"),
-                    // Green background if settings exist, matching main window style
                     Background = hasSettings ? Brushes.Green : Brushes.Transparent,
                     Tag        = fileNode
                 };
@@ -215,6 +254,10 @@ public partial class RunRemux : Window
         {
             if (_cancelRequested) break;
 
+            // Blank line before each file block (except the first) for readability
+            if (OutputLog.Text.Length > 0)
+                AppendLog("");
+
             AppendLog($"--- Processing: {file.FolderName}\\{file.FileName} ---");
             await ProcessFileAsync(file);
 
@@ -263,7 +306,9 @@ public partial class RunRemux : Window
 
     // ── Process a single file ─────────────────────────────────────────
     // Checks for a settings .txt file. If found, runs the saved command.
-    // If not found, runs Robocopy to copy the file to the output folder.
+    // Remux — no settings file: robocopy the file as-is.
+    // Transcode — no settings file: probe with ffprobe, build command from
+    // defaults, save to disk, then run ffmpeg.
     private async Task ProcessFileAsync(RunFileNode file)
     {
         var modeFolder   = _isTranscodeMode ? "Transcode" : "Remux";
@@ -328,9 +373,54 @@ public partial class RunRemux : Window
                 await RunProcessAsync(exe, args);
             }
         }
+        else if (_isTranscodeMode)
+        {
+            // ── Transcode: no settings file yet — build from ffprobe defaults ──
+            // Probe the file, build a command using default track settings
+            // (hevc, preset p4, all audio Keep), save it to disk for history,
+            // then run it. This mirrors what the UI would show on a fresh file
+            // selection with no changes made.
+            try
+            {
+                var inputFile = Path.Combine(_inputDirectory, file.FolderName, file.FileName);
+                var probe     = await FfprobeService.ProbeFileAsync(inputFile);
+
+                var videoTracks    = new System.Collections.ObjectModel.ObservableCollection<TranscodeVideoTrack>(probe.TranscodeVideo);
+                var audioTracks    = new System.Collections.ObjectModel.ObservableCollection<TranscodeAudioTrack>(probe.TranscodeAudio);
+                var subtitleTracks = new System.Collections.ObjectModel.ObservableCollection<TranscodeSubtitleTrack>(probe.TranscodeSubtitle);
+
+                var command = CommandBuilder.BuildTranscodeCommand(
+                    _outputDirectory, file.FolderName, file.FileName,
+                    _inputDirectory, videoTracks, audioTracks, subtitleTracks);
+
+                // Save to disk for history and future reference
+                var settingsDir = Path.Combine(_inputDirectory, "Transcode", file.FolderName);
+                Directory.CreateDirectory(settingsDir);
+                File.WriteAllText(settingsFile, command, System.Text.Encoding.UTF8);
+
+                AppendLog($"  (No settings file found — built from defaults and saved)");
+
+                // Ensure output folder exists then run
+                Directory.CreateDirectory(Path.Combine(_outputDirectory, file.FolderName));
+                await LogTranscodeSummaryAsync(command);
+
+                var exe  = command.StartsWith("\"")
+                    ? command.Substring(1, command.IndexOf('"', 1) - 1)
+                    : command.Substring(0, command.IndexOf(' '));
+                var args = command.StartsWith("\"")
+                    ? command.Substring(command.IndexOf('"', 1) + 1).Trim()
+                    : command.Substring(command.IndexOf(' ') + 1).Trim();
+
+                await RunProcessAsync(exe, args);
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"  Error building command: {ex.Message}");
+            }
+        }
         else
         {
-            // ── Robocopy — no settings file, just copy the file ───────
+            // ── Remux: no settings file — robocopy the file as-is ─────
             var sourceFolder = Path.Combine(_inputDirectory, file.FolderName);
             var destFolder   = Path.Combine(_outputDirectory, file.FolderName);
             var robocopyArgs = $"\"{sourceFolder}\" \"{destFolder}\" \"{file.FileName}\" " +
@@ -630,58 +720,75 @@ public partial class RunRemux : Window
     // In show-files mode: only individually checked files.
     private List<RunFileNode> GetCheckedFiles()
     {
-        var result    = new List<RunFileNode>();
-        var showFiles = ShowFilesCheckBox.IsChecked == true;
+        var result     = new List<RunFileNode>();
+        var showFiles  = ShowFilesCheckBox.IsChecked == true;
         var modeFolder = _isTranscodeMode ? "Transcode" : "Remux";
 
-        foreach (TreeViewItem folderItem in FolderTree.Items)
+        foreach (TreeViewItem topItem in FolderTree.Items)
         {
-            if (folderItem.Header is not CheckBox folderCb) continue;
-            if (folderItem.Tag is not RunFolderNode folderNode) continue;
-
-            if (showFiles)
+            if (topItem.Header is CheckBox)
             {
-                // Only process individually checked files
-                foreach (TreeViewItem fileItem in folderItem.Items)
-                {
-                    if (fileItem.Header is CheckBox fileCb &&
-                        fileCb.IsChecked == true &&
-                        fileItem.Tag is RunFileNode fileNode)
-                    {
-                        result.Add(fileNode);
-                    }
-                }
+                // ── Movie folder ──────────────────────────────────────
+                CollectFromFolderItem(topItem, showFiles, modeFolder, result);
             }
-            else if (folderCb.IsChecked == true)
+            else
             {
-                // Process all .mkv files in the checked folder
-                var folderPath = Path.Combine(_inputDirectory, folderNode.FolderName);
-                try
-                {
-                    var files = Directory.GetFiles(folderPath, "*.mkv")
-                        .Select(Path.GetFileName)
-                        .Where(f => f != null)
-                        .OrderBy(f => f);
-
-                    foreach (var fileName in files)
-                    {
-                        if (fileName == null) continue;
-                        var nameNoExt    = Path.GetFileNameWithoutExtension(fileName);
-                        var settingsFile = Path.Combine(_inputDirectory, modeFolder,
-                                               folderNode.FolderName, nameNoExt + ".txt");
-                        result.Add(new RunFileNode
-                        {
-                            FolderName  = folderNode.FolderName,
-                            FileName    = fileName,
-                            HasSettings = File.Exists(settingsFile)
-                        });
-                    }
-                }
-                catch { /* Skip unreadable folders */ }
+                // ── TV show: iterate season children ──────────────────
+                foreach (TreeViewItem seasonItem in topItem.Items)
+                    CollectFromFolderItem(seasonItem, showFiles, modeFolder, result);
             }
         }
 
         return result;
+    }
+
+    // Collects files from a single selectable folder item (movie or season).
+    // In show-files mode: only individually checked file children are collected.
+    // In folders mode: all .mkv files in the folder are collected if checked.
+    private void CollectFromFolderItem(TreeViewItem folderItem, bool showFiles,
+                                       string modeFolder, List<RunFileNode> result)
+    {
+        if (folderItem.Header is not CheckBox folderCb) return;
+        if (folderItem.Tag is not RunFolderNode folderNode) return;
+
+        if (showFiles)
+        {
+            foreach (TreeViewItem fileItem in folderItem.Items)
+            {
+                if (fileItem.Header is CheckBox fileCb &&
+                    fileCb.IsChecked == true &&
+                    fileItem.Tag is RunFileNode fileNode)
+                {
+                    result.Add(fileNode);
+                }
+            }
+        }
+        else if (folderCb.IsChecked == true)
+        {
+            var fullPath = Path.Combine(_inputDirectory, folderNode.FolderName);
+            try
+            {
+                var files = Directory.GetFiles(fullPath, "*.mkv")
+                    .Select(Path.GetFileName)
+                    .Where(f => f != null)
+                    .OrderBy(f => f);
+
+                foreach (var fileName in files)
+                {
+                    if (fileName == null) continue;
+                    var nameNoExt    = Path.GetFileNameWithoutExtension(fileName);
+                    var settingsFile = Path.Combine(_inputDirectory, modeFolder,
+                                           folderNode.FolderName, nameNoExt + ".txt");
+                    result.Add(new RunFileNode
+                    {
+                        FolderName  = folderNode.FolderName,
+                        FileName    = fileName,
+                        HasSettings = File.Exists(settingsFile)
+                    });
+                }
+            }
+            catch { /* Skip unreadable folders */ }
+        }
     }
 
     // ── Visual tree helper ────────────────────────────────────────────

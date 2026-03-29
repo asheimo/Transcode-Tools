@@ -98,8 +98,6 @@
                             <RowDefinition Height="36"/>
                             <RowDefinition Height="36"/>
                             <RowDefinition Height="36"/>
-                            <RowDefinition Height="36"/>
-                            <RowDefinition Height="36"/>
                         </Grid.RowDefinitions>
 
                         <!-- MPV -->
@@ -126,29 +124,17 @@
                         <Button    Grid.Row="3" Grid.Column="2" Content="Where"           Style="{StaticResource SmallButton}" Click="WhereFFprobe_Click"/>
                         <Button    Grid.Row="3" Grid.Column="3" Content="Browse"          Style="{StaticResource SmallButton}" Click="BrowseFFprobe_Click"/>
 
-                        <!-- other-transcode -->
-                        <TextBlock Grid.Row="4" Grid.Column="0" Text="other-transcode"    Style="{StaticResource PrefLabel}"/>
-                        <TextBox   Grid.Row="4" Grid.Column="1" x:Name="TbxOtherTranscode" VerticalContentAlignment="Center"/>
-                        <Button    Grid.Row="4" Grid.Column="2" Content="Where"           Style="{StaticResource SmallButton}" Click="WhereOtherTranscode_Click"/>
-                        <Button    Grid.Row="4" Grid.Column="3" Content="Browse"          Style="{StaticResource SmallButton}" Click="BrowseOtherTranscode_Click"/>
-
                         <!-- MKVPropEdit -->
-                        <TextBlock Grid.Row="5" Grid.Column="0" Text="MKVPropEdit"        Style="{StaticResource PrefLabel}"/>
-                        <TextBox   Grid.Row="5" Grid.Column="1" x:Name="TbxMKVPropEdit"   VerticalContentAlignment="Center"/>
-                        <Button    Grid.Row="5" Grid.Column="2" Content="Where"           Style="{StaticResource SmallButton}" Click="WhereMKVPropEdit_Click"/>
-                        <Button    Grid.Row="5" Grid.Column="3" Content="Browse"          Style="{StaticResource SmallButton}" Click="BrowseMKVPropEdit_Click"/>
+                        <TextBlock Grid.Row="4" Grid.Column="0" Text="MKVPropEdit"        Style="{StaticResource PrefLabel}"/>
+                        <TextBox   Grid.Row="4" Grid.Column="1" x:Name="TbxMKVPropEdit"   VerticalContentAlignment="Center"/>
+                        <Button    Grid.Row="4" Grid.Column="2" Content="Where"           Style="{StaticResource SmallButton}" Click="WhereMKVPropEdit_Click"/>
+                        <Button    Grid.Row="4" Grid.Column="3" Content="Browse"          Style="{StaticResource SmallButton}" Click="BrowseMKVPropEdit_Click"/>
 
                         <!-- MKVMerge -->
-                        <TextBlock Grid.Row="6" Grid.Column="0" Text="MKVMerge"           Style="{StaticResource PrefLabel}"/>
-                        <TextBox   Grid.Row="6" Grid.Column="1" x:Name="TbxMKVMerge"      VerticalContentAlignment="Center"/>
-                        <Button    Grid.Row="6" Grid.Column="2" Content="Where"           Style="{StaticResource SmallButton}" Click="WhereMKVMerge_Click"/>
-                        <Button    Grid.Row="6" Grid.Column="3" Content="Browse"          Style="{StaticResource SmallButton}" Click="BrowseMKVMerge_Click"/>
-
-                        <!-- Ruby -->
-                        <TextBlock Grid.Row="7" Grid.Column="0" Text="Ruby"               Style="{StaticResource PrefLabel}"/>
-                        <TextBox   Grid.Row="7" Grid.Column="1" x:Name="TbxRuby"          VerticalContentAlignment="Center"/>
-                        <Button    Grid.Row="7" Grid.Column="2" Content="Where"           Style="{StaticResource SmallButton}" Click="WhereRuby_Click"/>
-                        <Button    Grid.Row="7" Grid.Column="3" Content="Browse"          Style="{StaticResource SmallButton}" Click="BrowseRuby_Click"/>
+                        <TextBlock Grid.Row="5" Grid.Column="0" Text="MKVMerge"           Style="{StaticResource PrefLabel}"/>
+                        <TextBox   Grid.Row="5" Grid.Column="1" x:Name="TbxMKVMerge"      VerticalContentAlignment="Center"/>
+                        <Button    Grid.Row="5" Grid.Column="2" Content="Where"           Style="{StaticResource SmallButton}" Click="WhereMKVMerge_Click"/>
+                        <Button    Grid.Row="5" Grid.Column="3" Content="Browse"          Style="{StaticResource SmallButton}" Click="BrowseMKVMerge_Click"/>
 
                     </Grid>
                 </Border>
@@ -171,24 +157,30 @@
                             <RowDefinition Height="36"/>
                             <RowDefinition Height="36"/>
                             <RowDefinition Height="36"/>
-                            <RowDefinition Height="36"/>
-                            <RowDefinition Height="36"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="other-transcode Defaults" Style="{StaticResource PrefLabel}"/>
-                        <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TbxOtherTranscodeDefaults" VerticalContentAlignment="Center"/>
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="MKVMerge Defaults"        Style="{StaticResource PrefLabel}"/>
+                        <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TbxMKVMergeDefaults"    VerticalContentAlignment="Center"/>
 
-                        <TextBlock Grid.Row="1" Grid.Column="0" Text="other-transcode Options"  Style="{StaticResource PrefLabel}"/>
-                        <TextBox   Grid.Row="1" Grid.Column="1" x:Name="TbxOtherTranscodeOptions" VerticalContentAlignment="Center"/>
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="MKVMerge Options"         Style="{StaticResource PrefLabel}"/>
+                        <TextBox   Grid.Row="1" Grid.Column="1" x:Name="TbxMKVMergeOptions"     VerticalContentAlignment="Center"/>
 
-                        <TextBlock Grid.Row="2" Grid.Column="0" Text="MKVMerge Defaults"        Style="{StaticResource PrefLabel}"/>
-                        <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TbxMKVMergeDefaults"    VerticalContentAlignment="Center"/>
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="RoboCopy Defaults"        Style="{StaticResource PrefLabel}"/>
+                        <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TbxRoboCopyDefaults"    VerticalContentAlignment="Center"/>
 
-                        <TextBlock Grid.Row="3" Grid.Column="0" Text="MKVMerge Options"         Style="{StaticResource PrefLabel}"/>
-                        <TextBox   Grid.Row="3" Grid.Column="1" x:Name="TbxMKVMergeOptions"     VerticalContentAlignment="Center"/>
-
-                        <TextBlock Grid.Row="4" Grid.Column="0" Text="RoboCopy Defaults"        Style="{StaticResource PrefLabel}"/>
-                        <TextBox   Grid.Row="4" Grid.Column="1" x:Name="TbxRoboCopyDefaults"    VerticalContentAlignment="Center"/>
+                        <!-- Always Convert to HEVC -->
+                        <StackPanel Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2"
+                                    Margin="0,8,0,4">
+                            <CheckBox x:Name="ChkAlwaysConvertToHevc"
+                                      Content="Always Convert to HEVC"
+                                      HorizontalAlignment="Left"/>
+                            <TextBlock Text="When checked, files without saved settings will be transcoded using defaults (hevc, preset p4, all audio copy). When unchecked, files without saved settings will be robocopied."
+                                       Foreground="{DynamicResource SubtleForeground}"
+                                       FontSize="11"
+                                       TextWrapping="Wrap"
+                                       Margin="22,4,0,0"/>
+                        </StackPanel>
 
                     </Grid>
                 </Border>

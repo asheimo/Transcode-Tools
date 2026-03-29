@@ -119,6 +119,12 @@ public static class CommandBuilder
             var subIndexes = selectedSubtitles.Select(t => t.OriginalTrackIndex.ToString());
             sb.Append($" --subtitle-tracks {string.Join(",", subIndexes)}");
         }
+        else
+        {
+            // No subtitles selected — explicitly tell mkvmerge to drop them all.
+            // Without this flag, mkvmerge includes all subtitle tracks by default.
+            sb.Append(" --no-subtitles");
+        }
 
         // ── Track order ───────────────────────────────────────────────
         // If the user has reordered audio tracks via drag and drop, we need

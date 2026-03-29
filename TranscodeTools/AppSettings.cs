@@ -58,20 +58,20 @@ public sealed class AppSettings
     public string SubtitleEdit_Path    { get; set; } = "";
     public string FFmpeg_Path          { get; set; } = "";
     public string FFprobe_Path         { get; set; } = "";
-    public string OtherTranscode_Path  { get; set; } = "";
     public string MKVPropEdit_Path     { get; set; } = "";
     public string MKVMerge_Path        { get; set; } = "";
-    public string Ruby_Path            { get; set; } = "";
 
     // ── Default/options strings ──────────────────────────────────────
     // These match the original My.Settings defaults exactly.
-    public string OtherTranscode_Defaults { get; set; } = "--copy-track-names --add-audio eng --add-subtitle eng";
-    public string OtherTranscode_Options  { get; set; } = "--copy-track-names";
     public string MKVMerge_Defaults       { get; set; } = "";
     public string MKVMerge_Options        { get; set; } = "--no-buttons --no-attachments";
     public string RoboCopy_Defaults       { get; set; } = "/is /njs /ndl /nc /ns";
 
-    // ── Persistence methods ──────────────────────────────────────────
+    // ── Transcode behaviour ──────────────────────────────────────────
+    // When true, files without a settings file in Transcode mode are
+    // automatically built from defaults and run. When false, they are
+    // robocopied, requiring the user to explicitly save settings first.
+    public bool AlwaysConvertToHevc { get; set; } = true;
 
     // Load() reads the JSON file from disk and deserialises it into
     // an AppSettings object. If the file doesn't exist yet (first run)
@@ -125,9 +125,6 @@ public sealed class AppSettings
     // Helper to check if all required tool paths have been set.
     // Returns true only if every mandatory path has a value.
     // Used on startup and when the user clicks OK in UserPreferences.
-    // Note: OtherTranscode_Path and Ruby_Path are retained in settings for
-    // backwards compatibility but are no longer required — transcode now
-    // calls ffmpeg directly using FFmpeg_Path.
     public bool AllPathsSet() =>
         !string.IsNullOrWhiteSpace(MPV_Path)          &&
         !string.IsNullOrWhiteSpace(SubtitleEdit_Path) &&

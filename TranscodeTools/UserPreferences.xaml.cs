@@ -34,15 +34,12 @@ public partial class UserPreferences : Window
         string SubtitleEdit_Path,
         string FFmpeg_Path,
         string FFprobe_Path,
-        string OtherTranscode_Path,
         string MKVPropEdit_Path,
         string MKVMerge_Path,
-        string Ruby_Path,
-        string OtherTranscode_Defaults,
-        string OtherTranscode_Options,
         string MKVMerge_Defaults,
         string MKVMerge_Options,
-        string RoboCopy_Defaults
+        string RoboCopy_Defaults,
+        bool   AlwaysConvertToHevc
     );
 
     private readonly SettingsSnapshot _snapshot;
@@ -60,15 +57,12 @@ public partial class UserPreferences : Window
             s.SubtitleEdit_Path,
             s.FFmpeg_Path,
             s.FFprobe_Path,
-            s.OtherTranscode_Path,
             s.MKVPropEdit_Path,
             s.MKVMerge_Path,
-            s.Ruby_Path,
-            s.OtherTranscode_Defaults,
-            s.OtherTranscode_Options,
             s.MKVMerge_Defaults,
             s.MKVMerge_Options,
-            s.RoboCopy_Defaults
+            s.RoboCopy_Defaults,
+            s.AlwaysConvertToHevc
         );
 
         // Load the current saved settings into the text boxes.
@@ -111,15 +105,12 @@ public partial class UserPreferences : Window
         TbxSubtitleEdit.Text          = s.SubtitleEdit_Path;
         TbxFFmpeg.Text                = s.FFmpeg_Path;
         TbxFFprobe.Text               = s.FFprobe_Path;
-        TbxOtherTranscode.Text        = s.OtherTranscode_Path;
         TbxMKVPropEdit.Text           = s.MKVPropEdit_Path;
         TbxMKVMerge.Text              = s.MKVMerge_Path;
-        TbxRuby.Text                  = s.Ruby_Path;
-        TbxOtherTranscodeDefaults.Text = s.OtherTranscode_Defaults;
-        TbxOtherTranscodeOptions.Text  = s.OtherTranscode_Options;
         TbxMKVMergeDefaults.Text      = s.MKVMerge_Defaults;
         TbxMKVMergeOptions.Text       = s.MKVMerge_Options;
         TbxRoboCopyDefaults.Text      = s.RoboCopy_Defaults;
+        ChkAlwaysConvertToHevc.IsChecked = s.AlwaysConvertToHevc;
     }
 
     // Writes all text box values back to AppSettings and saves to disk.
@@ -131,15 +122,12 @@ public partial class UserPreferences : Window
         s.SubtitleEdit_Path       = TbxSubtitleEdit.Text;
         s.FFmpeg_Path             = TbxFFmpeg.Text;
         s.FFprobe_Path            = TbxFFprobe.Text;
-        s.OtherTranscode_Path     = TbxOtherTranscode.Text;
         s.MKVPropEdit_Path        = TbxMKVPropEdit.Text;
         s.MKVMerge_Path           = TbxMKVMerge.Text;
-        s.Ruby_Path               = TbxRuby.Text;
-        s.OtherTranscode_Defaults = TbxOtherTranscodeDefaults.Text;
-        s.OtherTranscode_Options  = TbxOtherTranscodeOptions.Text;
         s.MKVMerge_Defaults       = TbxMKVMergeDefaults.Text;
         s.MKVMerge_Options        = TbxMKVMergeOptions.Text;
         s.RoboCopy_Defaults       = TbxRoboCopyDefaults.Text;
+        s.AlwaysConvertToHevc     = ChkAlwaysConvertToHevc.IsChecked == true;
 
         // Persist to disk — writes settings.json in AppData\Roaming\TranscodeTools
         s.Save();
@@ -184,15 +172,12 @@ public partial class UserPreferences : Window
         s.SubtitleEdit_Path       = _snapshot.SubtitleEdit_Path;
         s.FFmpeg_Path             = _snapshot.FFmpeg_Path;
         s.FFprobe_Path            = _snapshot.FFprobe_Path;
-        s.OtherTranscode_Path     = _snapshot.OtherTranscode_Path;
         s.MKVPropEdit_Path        = _snapshot.MKVPropEdit_Path;
         s.MKVMerge_Path           = _snapshot.MKVMerge_Path;
-        s.Ruby_Path               = _snapshot.Ruby_Path;
-        s.OtherTranscode_Defaults = _snapshot.OtherTranscode_Defaults;
-        s.OtherTranscode_Options  = _snapshot.OtherTranscode_Options;
         s.MKVMerge_Defaults       = _snapshot.MKVMerge_Defaults;
         s.MKVMerge_Options        = _snapshot.MKVMerge_Options;
         s.RoboCopy_Defaults       = _snapshot.RoboCopy_Defaults;
+        s.AlwaysConvertToHevc     = _snapshot.AlwaysConvertToHevc;
 
         DialogResult = false;
         Close();
@@ -215,17 +200,11 @@ public partial class UserPreferences : Window
     private void WhereFFprobe_Click(object sender, RoutedEventArgs e)
         => TbxFFprobe.Text = RunWhere("ffprobe");
 
-    private void WhereOtherTranscode_Click(object sender, RoutedEventArgs e)
-        => TbxOtherTranscode.Text = RunWhere("other-transcode");
-
     private void WhereMKVPropEdit_Click(object sender, RoutedEventArgs e)
         => TbxMKVPropEdit.Text = RunWhere("mkvpropedit");
 
     private void WhereMKVMerge_Click(object sender, RoutedEventArgs e)
         => TbxMKVMerge.Text = RunWhere("mkvmerge");
-
-    private void WhereRuby_Click(object sender, RoutedEventArgs e)
-        => TbxRuby.Text = RunWhere("ruby");
 
     // ── "Browse" buttons ─────────────────────────────────────────────
     // Each Browse button opens a file picker so the user can navigate
@@ -246,17 +225,11 @@ public partial class UserPreferences : Window
     private void BrowseFFprobe_Click(object sender, RoutedEventArgs e)
         => TbxFFprobe.Text = BrowseForExe() ?? TbxFFprobe.Text;
 
-    private void BrowseOtherTranscode_Click(object sender, RoutedEventArgs e)
-        => TbxOtherTranscode.Text = BrowseForExe() ?? TbxOtherTranscode.Text;
-
     private void BrowseMKVPropEdit_Click(object sender, RoutedEventArgs e)
         => TbxMKVPropEdit.Text = BrowseForExe() ?? TbxMKVPropEdit.Text;
 
     private void BrowseMKVMerge_Click(object sender, RoutedEventArgs e)
         => TbxMKVMerge.Text = BrowseForExe() ?? TbxMKVMerge.Text;
-
-    private void BrowseRuby_Click(object sender, RoutedEventArgs e)
-        => TbxRuby.Text = BrowseForExe() ?? TbxRuby.Text;
 
     // ── Helper methods ───────────────────────────────────────────────
 

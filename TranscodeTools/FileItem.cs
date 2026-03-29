@@ -78,3 +78,35 @@ public class FileLeafNode : FileTreeNode
     // null for "Casino Royale (2006).mkv"
     public string? GroupKey { get; set; }
 }
+
+// ── FOLDER LIST NODES (left panel) ───────────────────────────────────
+//
+// The left panel uses a TreeView with two node types:
+//   FolderNode  — a movie folder, selectable directly (no children)
+//   ShowNode    — a TV show folder, expandable (has SeasonNode children)
+//   SeasonNode  — a season within a show, selectable
+
+// ── Movie folder node ─────────────────────────────────────────────────
+// Represents a single movie folder. Selecting it populates the file tree.
+// FolderPath is the folder name relative to the input directory.
+public class FolderNode : FileTreeNode
+{
+    public string FolderPath { get; set; } = "";
+}
+
+// ── TV show node ──────────────────────────────────────────────────────
+// Represents a TV show folder. Expanding it reveals SeasonNode children.
+// Not directly selectable — user must select a season.
+public class ShowNode : FileTreeNode
+{
+    public ObservableCollection<SeasonNode> Children { get; } = new();
+}
+
+// ── Season node ───────────────────────────────────────────────────────
+// Represents one season within a TV show. Selecting it populates the
+// file tree. FolderPath is relative to input directory, e.g.
+// "Star Trek- Picard\Season 01" — used directly as _selectedMovieFolder.
+public class SeasonNode : FileTreeNode
+{
+    public string FolderPath { get; set; } = "";
+}
