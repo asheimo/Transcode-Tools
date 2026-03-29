@@ -107,9 +107,9 @@
                 <MenuItem Header="Open Input Directory"  Click="OpenInputDirectory_Click"/>
                 <MenuItem Header="Open Output Directory" Click="OpenOutputDirectory_Click"/>
                 <MenuItem x:Name="RunMenuItem" Header="Run Remux" Click="Run_Click"/>
-                <Separator/>
+                <Separator Style="{StaticResource {x:Static MenuItem.SeparatorStyleKey}}"/>
                 <MenuItem Header="Preferences"           Click="Preferences_Click"/>
-                <Separator/>
+                <Separator Style="{StaticResource {x:Static MenuItem.SeparatorStyleKey}}"/>
                 <MenuItem Header="Exit"                  Click="Exit_Click"/>
             </MenuItem>
             <MenuItem Header="Help">
