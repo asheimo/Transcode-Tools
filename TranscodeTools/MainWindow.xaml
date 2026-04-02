@@ -316,7 +316,14 @@
                             <DataTemplate DataType="{x:Type local:FileLeafNode}">
                                 <TextBlock Text="{Binding DisplayName}"
                                            Background="{Binding Background}"
-                                           Padding="2,1"/>
+                                           Padding="2,1">
+                                    <TextBlock.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="Rename"
+                                                      Click="RenameLeaf_Click"/>
+                                        </ContextMenu>
+                                    </TextBlock.ContextMenu>
+                                </TextBlock>
                             </DataTemplate>
                         </TreeView.Resources>
                     </TreeView>

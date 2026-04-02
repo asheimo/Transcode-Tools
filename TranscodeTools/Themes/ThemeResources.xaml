@@ -395,6 +395,147 @@
     </Style>
 
 
+    <!-- ── TreeViewItem full style override ─────────────────────────────
+         The Aero2 default style binds HorizontalContentAlignment and
+         VerticalContentAlignment via RelativeSource FindAncestor looking for
+         an ItemsControl. This fails for TreeViewItem and produces 52+52 binding
+         errors. We copy the full Aero2 style here, replacing those two bindings
+         with direct values and substituting our theme colours throughout. -->
+
+    <!-- Arrow geometry for the expand/collapse toggle -->
+    <PathGeometry x:Key="ThemedTreeArrow">
+        <PathGeometry.Figures>
+            <PathFigureCollection>
+                <PathFigure IsFilled="True" StartPoint="0 0" IsClosed="True">
+                    <PathFigure.Segments>
+                        <PathSegmentCollection>
+                            <LineSegment Point="0 6"/>
+                            <LineSegment Point="6 0"/>
+                        </PathSegmentCollection>
+                    </PathFigure.Segments>
+                </PathFigure>
+            </PathFigureCollection>
+        </PathGeometry.Figures>
+    </PathGeometry>
+
+    <Style x:Key="ThemedExpandCollapseToggleStyle" TargetType="{x:Type ToggleButton}">
+        <Setter Property="Focusable" Value="False"/>
+        <Setter Property="Width"     Value="16"/>
+        <Setter Property="Height"    Value="16"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type ToggleButton}">
+                    <Border Width="16" Height="16" Background="Transparent" Padding="5,5,5,5">
+                        <Path x:Name="ExpandPath"
+                              Fill="{DynamicResource SubtleForeground}"
+                              Stroke="{DynamicResource SubtleForeground}"
+                              Data="{StaticResource ThemedTreeArrow}">
+                            <Path.RenderTransform>
+                                <RotateTransform Angle="135" CenterX="3" CenterY="3"/>
+                            </Path.RenderTransform>
+                        </Path>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="ExpandPath" Property="RenderTransform">
+                                <Setter.Value>
+                                    <RotateTransform Angle="180" CenterX="3" CenterY="3"/>
+                                </Setter.Value>
+                            </Setter>
+                            <Setter TargetName="ExpandPath" Property="Fill"   Value="{DynamicResource ForegroundColor}"/>
+                            <Setter TargetName="ExpandPath" Property="Stroke" Value="{DynamicResource ForegroundColor}"/>
+                        </Trigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="ExpandPath" Property="Stroke" Value="{DynamicResource AccentColor}"/>
+                            <Setter TargetName="ExpandPath" Property="Fill"   Value="{DynamicResource AccentColor}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style TargetType="{x:Type TreeViewItem}">
+        <Setter Property="Background"                Value="Transparent"/>
+        <!-- Set alignment directly — the Aero2 default uses RelativeSource
+             FindAncestor which fails and produces binding errors. -->
+        <Setter Property="HorizontalContentAlignment" Value="Left"/>
+        <Setter Property="VerticalContentAlignment"   Value="Center"/>
+        <Setter Property="Padding"                   Value="1,0,0,0"/>
+        <Setter Property="Foreground"                Value="{DynamicResource ForegroundColor}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type TreeViewItem}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition MinWidth="19" Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition/>
+                        </Grid.RowDefinitions>
+                        <ToggleButton x:Name="Expander"
+                                      Style="{StaticResource ThemedExpandCollapseToggleStyle}"
+                                      IsChecked="{Binding Path=IsExpanded, RelativeSource={RelativeSource TemplatedParent}}"
+                                      ClickMode="Press"/>
+                        <Border x:Name="Bd"
+                                Grid.Column="1"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="{TemplateBinding Padding}"
+                                SnapsToDevicePixels="true">
+                            <ContentPresenter x:Name="PART_Header"
+                                              ContentSource="Header"
+                                              HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}"/>
+                        </Border>
+                        <ItemsPresenter x:Name="ItemsHost"
+                                        Grid.Row="1"
+                                        Grid.Column="1"
+                                        Grid.ColumnSpan="2"/>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsExpanded" Value="false">
+                            <Setter TargetName="ItemsHost" Property="Visibility" Value="Collapsed"/>
+                        </Trigger>
+                        <Trigger Property="HasItems" Value="false">
+                            <Setter TargetName="Expander" Property="Visibility" Value="Hidden"/>
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="true">
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AccentColor}"/>
+                            <Setter Property="Foreground"                 Value="{DynamicResource ForegroundColor}"/>
+                        </Trigger>
+                        <MultiTrigger>
+                            <MultiTrigger.Conditions>
+                                <Condition Property="IsSelected"        Value="true"/>
+                                <Condition Property="IsSelectionActive" Value="false"/>
+                            </MultiTrigger.Conditions>
+                            <Setter TargetName="Bd" Property="Background" Value="{DynamicResource SurfaceBg}"/>
+                            <Setter Property="Foreground"                 Value="{DynamicResource SubtleForeground}"/>
+                        </MultiTrigger>
+                        <Trigger Property="IsEnabled" Value="false">
+                            <Setter Property="Foreground" Value="{DynamicResource SubtleForeground}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <Trigger Property="VirtualizingPanel.IsVirtualizing" Value="true">
+                <Setter Property="ItemsPanel">
+                    <Setter.Value>
+                        <ItemsPanelTemplate>
+                            <VirtualizingStackPanel/>
+                        </ItemsPanelTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
     <Style TargetType="ListView">
         <Setter Property="Background" Value="{DynamicResource PanelBg}"/>
         <Setter Property="BorderBrush" Value="{DynamicResource BorderColor}"/>

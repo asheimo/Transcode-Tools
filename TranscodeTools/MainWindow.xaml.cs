@@ -954,6 +954,229 @@ public partial class MainWindow : Window
         System.Diagnostics.Process.Start("explorer.exe", folderPath);
     }
 
+    // ── Right-click rename ───────────────────────────────────────────
+    // Fired from the context menu on a FileLeafNode in the right-panel TreeView.
+    // The ContextMenu is attached to the TextBlock inside the DataTemplate so we
+    // retrieve the leaf via the sender's DataContext rather than FileTree.SelectedItem.
+    private void RenameLeaf_Click(object sender, RoutedEventArgs e)
+    {
+        // Retrieve the leaf from the MenuItem's DataContext, walking up through
+        // the ContextMenu to the TextBlock it was attached to.
+        if (sender is not MenuItem menuItem) return;
+        if (menuItem.DataContext is not FileLeafNode leaf)
+        {
+            // ContextMenu.PlacementTarget is the TextBlock (a FrameworkElement);
+            // cast to FrameworkElement first to access DataContext.
+            if (menuItem.Parent is ContextMenu cm &&
+                cm.PlacementTarget is FrameworkElement fe &&
+                fe.DataContext is FileLeafNode placementLeaf)
+                leaf = placementLeaf;
+            else
+                return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_inputDirectory) ||
+            string.IsNullOrWhiteSpace(_selectedMovieFolder)) return;
+
+        var oldFileName   = leaf.FileName;
+        var oldNameNoExt  = Path.GetFileNameWithoutExtension(oldFileName);
+
+        // ── Show rename dialog ────────────────────────────────────────
+        var newNameNoExt = ShowRenameDialog(oldFileName);
+        if (newNameNoExt == null) return; // user cancelled
+
+        // Enforce .mkv extension: if the user's input already ends with .mkv
+        // (case-insensitive) keep it, otherwise append it.
+        var newFileName = newNameNoExt.EndsWith(".mkv", StringComparison.OrdinalIgnoreCase)
+            ? newNameNoExt
+            : newNameNoExt + ".mkv";
+
+        // No-op if the name hasn't changed
+        if (newFileName.Equals(oldFileName, StringComparison.OrdinalIgnoreCase)) return;
+
+        var folderPath   = Path.Combine(_inputDirectory, _selectedMovieFolder);
+        var oldFilePath  = Path.Combine(folderPath, oldFileName);
+        var newFilePath  = Path.Combine(folderPath, newFileName);
+
+        // ── Validate ──────────────────────────────────────────────────
+        if (!File.Exists(oldFilePath))
+        {
+            MessageBox.Show("The original file could not be found on disk.",
+                "Rename Failed", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        if (File.Exists(newFilePath))
+        {
+            MessageBox.Show($"A file named \"{newFileName}\" already exists in this folder.",
+                "Rename Failed", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        // ── Rename the .mkv file ──────────────────────────────────────
+        try
+        {
+            File.Move(oldFilePath, newFilePath);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Could not rename file:\n{ex.Message}",
+                "Rename Failed", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        // ── Rename matching .txt settings files ───────────────────────
+        // Check both Remux and Transcode settings folders regardless of
+        // current mode — the file may have settings saved in both.
+        var oldTxtName = oldNameNoExt + ".txt";
+        var newTxtName = Path.GetFileNameWithoutExtension(newFileName) + ".txt";
+
+        foreach (var modeFolder in new[] { "Remux", "Transcode" })
+        {
+            var settingsDir = Path.Combine(_inputDirectory, modeFolder, _selectedMovieFolder);
+            var oldTxtPath  = Path.Combine(settingsDir, oldTxtName);
+            var newTxtPath  = Path.Combine(settingsDir, newTxtName);
+
+            if (File.Exists(oldTxtPath))
+            {
+                try
+                {
+                    File.Move(oldTxtPath, newTxtPath);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(
+                        $"File renamed but could not rename {modeFolder} settings file:\n{ex.Message}",
+                        "Settings Rename Warning",
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+            }
+        }
+
+        // ── Update the tree node ──────────────────────────────────────
+        // Derive the new display name using the same logic as folder load:
+        // split on the last dash, check if the suffix is a known category.
+        leaf.FileName = newFileName;
+        var newNameNoExtFinal = Path.GetFileNameWithoutExtension(newFileName);
+        var lastDash  = newNameNoExtFinal.LastIndexOf('-');
+        if (lastDash > 0)
+        {
+            var suffix = newNameNoExtFinal.Substring(lastDash + 1);
+            leaf.DisplayName = KnownCategories.Contains(suffix)
+                ? newNameNoExtFinal.Substring(0, lastDash)
+                : newNameNoExtFinal;
+        }
+        else
+        {
+            leaf.DisplayName = newNameNoExtFinal;
+        }
+
+        // Update the selected file bar if this file is currently selected
+        if (FileTree.SelectedItem == leaf)
+            ShowSelectedFileBar(Path.GetFileNameWithoutExtension(newFileName));
+    }
+
+    // Shows a simple rename dialog pre-populated with the current filename
+    // (without extension). Returns the new name entered by the user, or null
+    // if they cancelled. Does not validate or modify the name.
+    private string? ShowRenameDialog(string currentFileName)
+    {
+        var win = new Window
+        {
+            Title                 = "Rename File",
+            Width                 = 500,
+            Height                = 140,
+            MinWidth              = 350,
+            MinHeight             = 140,
+            MaxHeight             = 140,
+            Owner                 = this,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Background            = (System.Windows.Media.Brush)FindResource("WindowBg"),
+            ResizeMode            = ResizeMode.NoResize,
+            ShowInTaskbar         = false
+        };
+
+        var grid = new Grid { Margin = new Thickness(12) };
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(8) });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+        var textBox = new TextBox
+        {
+            Text              = currentFileName,
+            FontSize          = 13,
+            Foreground        = (System.Windows.Media.Brush)FindResource("ForegroundColor"),
+            Background        = (System.Windows.Media.Brush)FindResource("InputBg"),
+            BorderBrush       = (System.Windows.Media.Brush)FindResource("BorderColor"),
+            BorderThickness   = new Thickness(1),
+            Padding           = new Thickness(6, 4, 6, 4),
+            VerticalContentAlignment = VerticalAlignment.Center
+        };
+        Grid.SetRow(textBox, 0);
+
+        var buttonPanel = new StackPanel
+        {
+            Orientation         = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right
+        };
+
+        var cancelBtn = new Button
+        {
+            Content = "Cancel",
+            Width   = 80,
+            Margin  = new Thickness(0, 0, 8, 0),
+            Style   = (Style)FindResource("FlatButton")
+        };
+
+        var okBtn = new Button
+        {
+            Content = "OK",
+            Width   = 80,
+            Style   = (Style)FindResource("AccentButton"),
+            IsDefault = true
+        };
+
+        buttonPanel.Children.Add(cancelBtn);
+        buttonPanel.Children.Add(okBtn);
+        Grid.SetRow(buttonPanel, 2);
+
+        grid.Children.Add(textBox);
+        grid.Children.Add(buttonPanel);
+        win.Content = grid;
+
+        string? result = null;
+
+        okBtn.Click += (_, _) =>
+        {
+            var input = textBox.Text.Trim();
+            if (string.IsNullOrWhiteSpace(input))
+            {
+                MessageBox.Show("Please enter a filename.", "Rename",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            result = input;
+            win.DialogResult = true;
+            win.Close();
+        };
+
+        cancelBtn.Click += (_, _) =>
+        {
+            win.DialogResult = false;
+            win.Close();
+        };
+
+        // Focus the text box and position caret at the end on load
+        win.Loaded += (_, _) =>
+        {
+            textBox.Focus();
+            textBox.CaretIndex = textBox.Text.Length;
+        };
+
+        win.ShowDialog();
+        return result;
+    }
+
     private void SaveSettings_Click(object sender, RoutedEventArgs e)
     {
         // ── Validate prerequisites ────────────────────────────────────
