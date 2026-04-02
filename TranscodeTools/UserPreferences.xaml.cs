@@ -10,6 +10,7 @@ using System.Diagnostics;  // For Process (running "where" command)
 using System.Windows;
 using System.Windows.Controls;  // For TextBox
 using System.Windows.Input;     // For KeyboardFocusChangedEventArgs
+using System.Text.RegularExpressions; // For numeric-only input validation
 using Microsoft.Win32;          // For OpenFileDialog
 
 namespace TranscodeTools;
@@ -39,7 +40,8 @@ public partial class UserPreferences : Window
         string MKVMerge_Defaults,
         string MKVMerge_Options,
         string RoboCopy_Defaults,
-        bool   AlwaysConvertToHevc
+        bool   AlwaysConvertToHevc,
+        int    RecentFolderHistorySize
     );
 
     private readonly SettingsSnapshot _snapshot;
@@ -62,7 +64,8 @@ public partial class UserPreferences : Window
             s.MKVMerge_Defaults,
             s.MKVMerge_Options,
             s.RoboCopy_Defaults,
-            s.AlwaysConvertToHevc
+            s.AlwaysConvertToHevc,
+            s.RecentFolderHistorySize
         );
 
         // Load the current saved settings into the text boxes.
@@ -111,6 +114,7 @@ public partial class UserPreferences : Window
         TbxMKVMergeOptions.Text       = s.MKVMerge_Options;
         TbxRoboCopyDefaults.Text      = s.RoboCopy_Defaults;
         ChkAlwaysConvertToHevc.IsChecked = s.AlwaysConvertToHevc;
+        TbxHistorySize.Text               = s.RecentFolderHistorySize.ToString();
     }
 
     // Writes all text box values back to AppSettings and saves to disk.
@@ -128,6 +132,9 @@ public partial class UserPreferences : Window
         s.MKVMerge_Options        = TbxMKVMergeOptions.Text;
         s.RoboCopy_Defaults       = TbxRoboCopyDefaults.Text;
         s.AlwaysConvertToHevc     = ChkAlwaysConvertToHevc.IsChecked == true;
+        // Parse history size — fall back to current value if the box is empty or invalid
+        if (int.TryParse(TbxHistorySize.Text, out var histSize) && histSize > 0)
+            s.RecentFolderHistorySize = histSize;
 
         // Persist to disk — writes settings.json in AppData\Roaming\TranscodeTools
         s.Save();
@@ -177,7 +184,8 @@ public partial class UserPreferences : Window
         s.MKVMerge_Defaults       = _snapshot.MKVMerge_Defaults;
         s.MKVMerge_Options        = _snapshot.MKVMerge_Options;
         s.RoboCopy_Defaults       = _snapshot.RoboCopy_Defaults;
-        s.AlwaysConvertToHevc     = _snapshot.AlwaysConvertToHevc;
+        s.AlwaysConvertToHevc        = _snapshot.AlwaysConvertToHevc;
+        s.RecentFolderHistorySize    = _snapshot.RecentFolderHistorySize;
 
         DialogResult = false;
         Close();
@@ -230,6 +238,13 @@ public partial class UserPreferences : Window
 
     private void BrowseMKVMerge_Click(object sender, RoutedEventArgs e)
         => TbxMKVMerge.Text = BrowseForExe() ?? TbxMKVMerge.Text;
+
+    // ── Input validation ─────────────────────────────────────────────
+    // Prevents non-numeric characters being typed into the History Size box.
+    private void HistorySize_PreviewTextInput(object sender, System.Windows.Input.TextCompositionEventArgs e)
+    {
+        e.Handled = !Regex.IsMatch(e.Text, @"^[0-9]+$");
+    }
 
     // ── Helper methods ───────────────────────────────────────────────
 

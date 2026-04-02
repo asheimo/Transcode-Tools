@@ -221,9 +221,14 @@
                             Style="{StaticResource FlatButton}"
                             Margin="0,0,6,0"
                             Click="OpenInputDirectory_Click"/>
-                    <TextBox Grid.Column="1"
-                             x:Name="InputDirectoryBox"
-                             IsReadOnly="True"/>
+                    <!-- IsEditable="False" keeps the text portion read-only;
+                         IsReadOnly="True" on the inner TextBox prevents typing.
+                         The dropdown arrow opens the history list. -->
+                    <ComboBox Grid.Column="1"
+                              x:Name="InputDirectoryBox"
+                              IsEditable="True"
+                              IsReadOnly="True"
+                              SelectionChanged="InputDirectoryBox_SelectionChanged"/>
                 </Grid>
 
                 <!-- Output directory -->
@@ -237,9 +242,11 @@
                             Style="{StaticResource FlatButton}"
                             Margin="0,0,6,0"
                             Click="OpenOutputDirectory_Click"/>
-                    <TextBox Grid.Column="1"
-                             x:Name="OutputDirectoryBox"
-                             IsReadOnly="True"/>
+                    <ComboBox Grid.Column="1"
+                              x:Name="OutputDirectoryBox"
+                              IsEditable="True"
+                              IsReadOnly="True"
+                              SelectionChanged="OutputDirectoryBox_SelectionChanged"/>
                 </Grid>
             </Grid>
 

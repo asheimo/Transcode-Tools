@@ -185,6 +185,41 @@
                     </Grid>
                 </Border>
 
+
+                <!-- ── GENERAL section ───────────────────────────── -->
+                <TextBlock Text="GENERAL"
+                           Style="{StaticResource SectionHeader}"/>
+
+                <Border Background="{DynamicResource SurfaceBg}"
+                        BorderBrush="{DynamicResource BorderColor}"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Padding="12,8">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="180"/>
+                            <ColumnDefinition Width="80"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="36"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0"
+                                   Text="Folder History Size"
+                                   Style="{StaticResource PrefLabel}"/>
+                        <TextBox   Grid.Row="0" Grid.Column="1"
+                                   x:Name="TbxHistorySize"
+                                   VerticalContentAlignment="Center"
+                                   PreviewTextInput="HistorySize_PreviewTextInput"/>
+                        <TextBlock Grid.Row="0" Grid.Column="2"
+                                   Text="(applies to both Input and Output history)"
+                                   Style="{StaticResource PrefLabel}"
+                                   Foreground="{DynamicResource SubtleForeground}"
+                                   FontSize="11"/>
+                    </Grid>
+                </Border>
+
             </StackPanel>
         </ScrollViewer>
     </DockPanel>

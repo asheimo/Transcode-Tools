@@ -30,7 +30,7 @@ public partial class MainWindow : Window
     public static readonly IReadOnlyList<string> VideoResolutionOptions =
         ["Keep", "480p", "720p", "1080p", "2160p"];
     public static readonly IReadOnlyList<string> VideoOutputFormatOptions =
-        ["h.264 (default)", "hevc"];
+        ["hevc (default)", "h.264"];
     public static readonly IReadOnlyList<string> VideoFrameRateOptions =
         ["Keep", "30000/1001", "24000/1001"];
     public static readonly IReadOnlyList<string> AudioFormatOptions =
@@ -84,6 +84,7 @@ public partial class MainWindow : Window
 
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
+        RefreshHistoryDropdowns();
         ValidatePathsOnStartup();
     }
 
@@ -133,21 +134,83 @@ public partial class MainWindow : Window
         var path = BrowseFolder("Select Input Directory");
         if (path == null) return;
 
-        _inputDirectory = path;
-        InputDirectoryBox.Text = path;
-        LoadMovieFolders(path);
-
-        // Clear the right panel and tracks when a new input is chosen
-        FileTree.Items.Clear();
-        ClearTrackTables();
-        HideSelectedFileBar();
+        LoadInputDirectory(path);
     }
 
     private void OpenOutputDirectory_Click(object sender, RoutedEventArgs e)
     {
         var path = BrowseFolder("Select Output Directory");
         if (path == null) return;
-        OutputDirectoryBox.Text = path;
+
+        LoadOutputDirectory(path);
+    }
+
+    // ── History dropdown handlers ────────────────────────────────────
+    // Fire when the user selects an item from the recent folders dropdown.
+    // _suppressDirectorySelection guards against the handler firing when
+    // we programmatically set the ItemsSource (which triggers SelectionChanged).
+    private bool _suppressDirectorySelection = false;
+
+    private void InputDirectoryBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressDirectorySelection) return;
+        if (InputDirectoryBox.SelectedItem is not string selected) return;
+        LoadInputDirectory(selected);
+    }
+
+    private void OutputDirectoryBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressDirectorySelection) return;
+        if (OutputDirectoryBox.SelectedItem is not string selected) return;
+        LoadOutputDirectory(selected);
+    }
+
+    // ── Directory load helpers ───────────────────────────────────────
+    // Shared logic for both Browse and history selection so both paths
+    // behave identically.
+
+    private void LoadInputDirectory(string folder)
+    {
+        _inputDirectory = folder;
+        AppSettings.Instance.AddRecentInput(folder);
+        AppSettings.Instance.Save();
+        RefreshHistoryDropdowns();
+
+        // Set Text after refreshing so the ComboBox shows the selected path
+        InputDirectoryBox.Text = folder;
+        LoadMovieFolders(folder);
+
+        FileTree.Items.Clear();
+        ClearTrackTables();
+        HideSelectedFileBar();
+    }
+
+    private void LoadOutputDirectory(string folder)
+    {
+        AppSettings.Instance.AddRecentOutput(folder);
+        AppSettings.Instance.Save();
+        RefreshHistoryDropdowns();
+
+        OutputDirectoryBox.Text = folder;
+    }
+
+    // Repopulates both ComboBox ItemsSource lists from saved history.
+    // Uses a suppress flag to prevent SelectionChanged firing during the update.
+    private void RefreshHistoryDropdowns()
+    {
+        _suppressDirectorySelection = true;
+
+        var currentInput  = InputDirectoryBox.Text;
+        var currentOutput = OutputDirectoryBox.Text;
+
+        InputDirectoryBox.ItemsSource  = AppSettings.Instance.RecentInputFolders.ToList();
+        OutputDirectoryBox.ItemsSource = AppSettings.Instance.RecentOutputFolders.ToList();
+
+        // Restore the displayed text — ItemsSource reset clears it
+        InputDirectoryBox.Text  = currentInput;
+        OutputDirectoryBox.Text = currentOutput;
+
+        _suppressDirectorySelection = false;
     }
 
     private static string? BrowseFolder(string title)
@@ -435,7 +498,17 @@ public partial class MainWindow : Window
 
             // Populate Remux tracks
             foreach (var t in result.RemuxVideo)    RemuxVideoTracks.Add(t);
-            foreach (var t in result.RemuxAudio)    RemuxAudioTracks.Add(t);
+            foreach (var t in result.RemuxAudio)
+            {
+                // Wire IsSelected changes to re-evaluate drag availability.
+                // Drag reorder only makes sense when 2+ tracks are selected.
+                t.PropertyChanged += (s, e) =>
+                {
+                    if (e.PropertyName == nameof(RemuxAudioTrack.IsSelected))
+                        UpdateAudioDragState();
+                };
+                RemuxAudioTracks.Add(t);
+            }
             foreach (var t in result.RemuxSubtitle) RemuxSubtitleTracks.Add(t);
 
             // Populate Transcode tracks
@@ -455,6 +528,11 @@ public partial class MainWindow : Window
             // user to make an explicit choice to avoid unintended selections.
             if (RemuxAudioTracks.Count == 1 && !RemuxAudioTracks[0].IsSelected)
                 RemuxAudioTracks[0].IsSelected = true;
+
+            // Set initial drag state based on how many tracks are selected.
+            // The PropertyChanged wires above keep this current as the user
+            // checks and unchecks tracks.
+            UpdateAudioDragState();
         }
         catch (InvalidOperationException)
         {
@@ -521,10 +599,13 @@ public partial class MainWindow : Window
             foreach (var track in RemuxAudioTracks)
                 track.IsSelected = audioIndexes.Contains(track.OriginalTrackIndex);
 
-            // Only reorder if the saved indexes are NOT in ascending order.
+            // Only reorder if there are 2+ selected tracks AND they are not in
+            // ascending order. A single selected track can never be reordered,
+            // and IsAscendingOrder would return true trivially for one element
+            // anyway — this guard makes that intent explicit.
             // e.g. "1,2,8" — tracks are in natural order, no reorder needed.
             // e.g. "2,1,8" — tracks 1 and 2 were swapped by the user, restore it.
-            if (!CommandBuilder.IsAscendingOrder(audioIndexes))
+            if (audioIndexes.Count >= 2 && !CommandBuilder.IsAscendingOrder(audioIndexes))
             {
                 // Find the current collection indexes (slots) occupied by the
                 // selected tracks, in ascending order.
@@ -678,6 +759,20 @@ public partial class MainWindow : Window
         TranscodeVideoTracks.Clear();
         TranscodeAudioTracks.Clear();
         TranscodeSubtitleTracks.Clear();
+
+        // Disable drag until tracks are loaded and 2+ are selected.
+        if (RemuxAudioList != null)
+            RemuxAudioList.AllowDrop = false;
+    }
+
+    // ── Audio drag state ─────────────────────────────────────────────
+    // Drag reorder only makes sense when 2 or more audio tracks are selected.
+    // Called after track population, after settings load, and whenever
+    // IsSelected changes on any RemuxAudioTrack.
+    private void UpdateAudioDragState()
+    {
+        var selectedCount = RemuxAudioTracks.Count(t => t.IsSelected);
+        RemuxAudioList.AllowDrop = selectedCount >= 2;
     }
 
     // These three handlers work together:
@@ -738,6 +833,10 @@ public partial class MainWindow : Window
     // Uses HitTest to find which item is under the mouse pointer.
     private void StartDragCapture(ListView list, MouseButtonEventArgs e)
     {
+        // If drag is disabled for this list (e.g. fewer than 2 audio tracks
+        // selected), don't capture — let normal click handling proceed.
+        if (!list.AllowDrop) return;
+
         // VisualTreeHelper.HitTest finds whatever visual element is under
         // the mouse. We walk up the visual tree to find the ListViewItem.
         var hit = list.InputHitTest(e.GetPosition(list)) as DependencyObject;

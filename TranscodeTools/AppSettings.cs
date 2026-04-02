@@ -73,6 +73,31 @@ public sealed class AppSettings
     // robocopied, requiring the user to explicitly save settings first.
     public bool AlwaysConvertToHevc { get; set; } = true;
 
+    // ── Recent folder history ────────────────────────────────────────
+    // Stores the most recently used input and output folder paths so the
+    // user can quickly reload them from a dropdown without browsing again.
+    // Both lists share a single max size setting.
+    public List<string> RecentInputFolders  { get; set; } = new();
+    public List<string> RecentOutputFolders { get; set; } = new();
+    public int RecentFolderHistorySize      { get; set; } = 6;
+
+    // Prepends a path to the recent input/output list, deduplicates, and
+    // trims to RecentFolderHistorySize. Call after a successful selection.
+    public void AddRecentInput(string folder)  => AddRecent(RecentInputFolders,  folder);
+    public void AddRecentOutput(string folder) => AddRecent(RecentOutputFolders, folder);
+
+    private void AddRecent(List<string> list, string folder)
+    {
+        if (string.IsNullOrWhiteSpace(folder)) return;
+        // Remove any existing entry (case-insensitive) so it does not appear
+        // twice, then insert at the top as the most recently used.
+        list.RemoveAll(p => p.Equals(folder, StringComparison.OrdinalIgnoreCase));
+        list.Insert(0, folder);
+        // Trim to the configured max size
+        while (list.Count > RecentFolderHistorySize)
+            list.RemoveAt(list.Count - 1);
+    }
+
     // Load() reads the JSON file from disk and deserialises it into
     // an AppSettings object. If the file doesn't exist yet (first run)
     // it returns a new AppSettings with all the default values above.
