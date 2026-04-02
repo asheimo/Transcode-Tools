@@ -4,9 +4,10 @@
         xmlns:sys="clr-namespace:System;assembly=mscorlib"
         xmlns:local="clr-namespace:TranscodeTools"
         Title="Transcode Tools"
-        Width="1100" Height="820"
+        Width="1000" Height="820"
         MinWidth="800" MinHeight="600"
         Background="{DynamicResource WindowBg}"
+        WindowStartupLocation="CenterScreen"
         Loaded="MainWindow_Loaded">
 
     <Window.Resources>
@@ -193,8 +194,15 @@
             </Grid>
         </Border>
 
-        <!-- Main content area -->
+        <!-- Main content area — three shared columns so directory pickers
+             and browser panels align perfectly:
+             Col 0 = left panel (*), Col 1 = splitter (8px), Col 2 = right panel (*) -->
         <Grid Margin="12,10,12,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" MinWidth="150"/>
+                <ColumnDefinition Width="8"/>
+                <ColumnDefinition Width="*" MinWidth="150"/>
+            </Grid.ColumnDefinitions>
             <Grid.RowDefinitions>
                 <RowDefinition Height="32"/>       <!-- Directory pickers -->
                 <RowDefinition Height="200"/>      <!-- File browser panels -->
@@ -202,66 +210,66 @@
                 <RowDefinition Height="*"/>        <!-- Track tables -->
             </Grid.RowDefinitions>
 
-            <!-- Directory pickers row -->
-            <Grid Grid.Row="0">
+            <!-- Input directory picker — aligned to left panel column -->
+            <Grid Grid.Row="0" Grid.Column="0">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="16"/>
+                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
-
-                <!-- Input directory -->
-                <Grid Grid.Column="0">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-                    <Button Grid.Column="0"
-                            Content="Input Directory"
-                            Style="{StaticResource FlatButton}"
-                            Margin="0,0,6,0"
-                            Click="OpenInputDirectory_Click"/>
-                    <!-- IsEditable="False" keeps the text portion read-only;
-                         IsReadOnly="True" on the inner TextBox prevents typing.
-                         The dropdown arrow opens the history list. -->
-                    <ComboBox Grid.Column="1"
-                              x:Name="InputDirectoryBox"
-                              IsEditable="True"
-                              IsReadOnly="True"
-                              SelectionChanged="InputDirectoryBox_SelectionChanged"/>
-                </Grid>
-
-                <!-- Output directory -->
-                <Grid Grid.Column="2">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-                    <Button Grid.Column="0"
-                            Content="Output Directory"
-                            Style="{StaticResource FlatButton}"
-                            Margin="0,0,6,0"
-                            Click="OpenOutputDirectory_Click"/>
-                    <ComboBox Grid.Column="1"
-                              x:Name="OutputDirectoryBox"
-                              IsEditable="True"
-                              IsReadOnly="True"
-                              SelectionChanged="OutputDirectoryBox_SelectionChanged"/>
-                </Grid>
+                <Button Grid.Column="0"
+                        Content="Input Directory"
+                        Style="{StaticResource FlatButton}"
+                        Margin="0,0,6,0"
+                        Click="OpenInputDirectory_Click"/>
+                <ComboBox Grid.Column="1"
+                          x:Name="InputDirectoryBox"
+                          IsEditable="True"
+                          IsReadOnly="True"
+                          SelectionChanged="InputDirectoryBox_SelectionChanged"/>
             </Grid>
 
-            <!-- File browser panels -->
-            <Grid Grid.Row="1" Margin="0,8,0,0">
+            <!-- Output directory picker — aligned to right panel column -->
+            <Grid Grid.Row="0" Grid.Column="2">
                 <Grid.ColumnDefinitions>
-                    <!-- Left list (movie folders) takes 40% of width -->
-                    <ColumnDefinition Width="2*"/>
-                    <ColumnDefinition Width="8"/>
-                    <!-- Right TreeView (files within selected folder) takes 60% -->
-                    <ColumnDefinition Width="3*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
+                <Button Grid.Column="0"
+                        Content="Output Directory"
+                        Style="{StaticResource FlatButton}"
+                        Margin="0,0,6,0"
+                        Click="OpenOutputDirectory_Click"/>
+                <ComboBox Grid.Column="1"
+                          x:Name="OutputDirectoryBox"
+                          IsEditable="True"
+                          IsReadOnly="True"
+                          SelectionChanged="OutputDirectoryBox_SelectionChanged"/>
+            </Grid>
+
+            <!-- Adjustable splitter — spans both directory picker and browser rows -->
+            <GridSplitter Grid.Column="1" Grid.Row="0" Grid.RowSpan="2"
+                          HorizontalAlignment="Stretch"
+                          VerticalAlignment="Stretch"
+                          ResizeDirection="Columns"
+                          ResizeBehavior="PreviousAndNext"
+                          Background="Transparent">
+                <GridSplitter.Template>
+                    <ControlTemplate TargetType="GridSplitter">
+                        <Grid Background="Transparent">
+                            <StackPanel Orientation="Vertical"
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Center">
+                                <Ellipse Width="4" Height="4" Fill="{DynamicResource SubtleForeground}" Margin="0,2,0,2"/>
+                                <Ellipse Width="4" Height="4" Fill="{DynamicResource SubtleForeground}" Margin="0,2,0,2"/>
+                                <Ellipse Width="4" Height="4" Fill="{DynamicResource SubtleForeground}" Margin="0,2,0,2"/>
+                            </StackPanel>
+                        </Grid>
+                    </ControlTemplate>
+                </GridSplitter.Template>
+            </GridSplitter>
 
                 <!-- Left: folder/show browser -->
-                <Border Grid.Column="0"
+                <Border Grid.Row="1" Grid.Column="0" Margin="0,8,0,0"
                         Background="{DynamicResource PanelBg}"
                         BorderBrush="{DynamicResource BorderColor}"
                         BorderThickness="1"
@@ -292,7 +300,7 @@
                 </Border>
 
                 <!-- Right: TreeView of files within the selected folder -->
-                <Border Grid.Column="2"
+                <Border Grid.Row="1" Grid.Column="2" Margin="0,8,0,0"
                         Background="{DynamicResource PanelBg}"
                         BorderBrush="{DynamicResource BorderColor}"
                         BorderThickness="1"
@@ -328,11 +336,10 @@
                         </TreeView.Resources>
                     </TreeView>
                 </Border>
-            </Grid>
 
             <!-- Selected file bar — shows which file's tracks are displayed below -->
             <!-- Hidden until a file is selected -->
-            <Border Grid.Row="2"
+            <Border Grid.Row="2" Grid.ColumnSpan="3"
                     x:Name="SelectedFileBar"
                     Background="{DynamicResource SurfaceBg}"
                     BorderBrush="{DynamicResource BorderColor}"
@@ -348,7 +355,7 @@
             </Border>
 
             <!-- Track panels -->
-            <Grid Grid.Row="3" Margin="0,8,0,0">
+            <Grid Grid.Row="3" Grid.ColumnSpan="3" Margin="0,8,0,0">
 
                 <!-- REMUX MODE -->
                 <Grid x:Name="RemuxPanel">
@@ -395,6 +402,7 @@
                               BorderBrush="{DynamicResource BorderColor}"
                               SelectionMode="Single"
                               AllowDrop="True"
+                              ToolTip="Select 2 or more tracks to enable reordering"
                               ScrollViewer.VerticalScrollBarVisibility="Auto"
                               PreviewMouseLeftButtonDown="AudioList_PreviewMouseLeftButtonDown"
                               PreviewMouseMove="AudioList_PreviewMouseMove"

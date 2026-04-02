@@ -772,7 +772,13 @@ public partial class MainWindow : Window
     private void UpdateAudioDragState()
     {
         var selectedCount = RemuxAudioTracks.Count(t => t.IsSelected);
-        RemuxAudioList.AllowDrop = selectedCount >= 2;
+        var dragEnabled   = selectedCount >= 2;
+        RemuxAudioList.AllowDrop = dragEnabled;
+        // Show the tooltip only when drag is disabled — once 2+ tracks are
+        // selected it disappears since the feature is now available.
+        RemuxAudioList.ToolTip = dragEnabled
+            ? null
+            : "Select 2 or more tracks to enable reordering";
     }
 
     // These three handlers work together:

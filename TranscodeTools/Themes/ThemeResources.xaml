@@ -199,7 +199,8 @@
                             SnapsToDevicePixels="true"
                             BorderThickness="{TemplateBinding BorderThickness}"
                             BorderBrush="{DynamicResource BorderColor}"
-                            Background="{DynamicResource InputBg}">
+                            Background="{DynamicResource InputBg}"
+                            CornerRadius="4">
                         <Border x:Name="splitBorder"
                                 SnapsToDevicePixels="true"
                                 HorizontalAlignment="Right"
@@ -328,6 +329,7 @@
                         <Border x:Name="editBorder"
                                 Margin="{TemplateBinding BorderThickness}"
                                 Background="{DynamicResource InputBg}"
+                                CornerRadius="3"
                                 Visibility="Collapsed">
                             <TextBox x:Name="PART_EditableTextBox"
                                      Style="{StaticResource ThemedComboBoxEditableTextBox}"
