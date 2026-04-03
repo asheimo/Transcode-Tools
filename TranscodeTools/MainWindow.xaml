@@ -11,6 +11,9 @@
         Loaded="MainWindow_Loaded">
 
     <Window.Resources>
+        <!-- BooleanToVisibilityConverter — used for HasYearWarning indicator -->
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility"/>
+
         <!-- Mode switcher radio button style -->
         <Style x:Key="ModeRadio" TargetType="RadioButton">
             <Setter Property="Foreground" Value="{DynamicResource ForegroundColor}"/>
@@ -219,6 +222,7 @@
                 <Button Grid.Column="0"
                         Content="Input Directory"
                         Style="{StaticResource FlatButton}"
+                        Width="130"
                         Margin="0,0,6,0"
                         Click="OpenInputDirectory_Click"/>
                 <ComboBox Grid.Column="1"
@@ -237,6 +241,7 @@
                 <Button Grid.Column="0"
                         Content="Output Directory"
                         Style="{StaticResource FlatButton}"
+                        Width="130"
                         Margin="0,0,6,0"
                         Click="OpenOutputDirectory_Click"/>
                 <ComboBox Grid.Column="1"
@@ -282,9 +287,19 @@
                               ScrollViewer.VerticalScrollBarVisibility="Auto"
                               SelectedItemChanged="FolderList_SelectedItemChanged">
                         <TreeView.Resources>
-                            <!-- Movie folder: leaf node, no children -->
+                            <!-- Movie folder: leaf node, no children.
+                                 Warning indicator shown when folder name has no (YYYY) year. -->
                             <DataTemplate DataType="{x:Type local:FolderNode}">
-                                <TextBlock Text="{Binding DisplayName}" Padding="2,1"/>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="⚠ "
+                                               Foreground="#FFCC00"
+                                               FontSize="11"
+                                               VerticalAlignment="Center"
+                                               ToolTip="Missing Year Label"
+                                               Visibility="{Binding HasYearWarning,
+                                                   Converter={StaticResource BoolToVisibility}}"/>
+                                    <TextBlock Text="{Binding DisplayName}" Padding="2,1"/>
+                                </StackPanel>
                             </DataTemplate>
                             <!-- TV show: expandable node with season children -->
                             <HierarchicalDataTemplate DataType="{x:Type local:ShowNode}"
@@ -320,18 +335,28 @@
                                            Padding="2,1"/>
                             </HierarchicalDataTemplate>
 
-                            <!-- Leaf node template: shows individual file name -->
+                            <!-- Leaf node template: shows individual file name.
+                                 Warning indicator shown when filename has no (YYYY) year. -->
                             <DataTemplate DataType="{x:Type local:FileLeafNode}">
-                                <TextBlock Text="{Binding DisplayName}"
-                                           Background="{Binding Background}"
-                                           Padding="2,1">
-                                    <TextBlock.ContextMenu>
-                                        <ContextMenu>
-                                            <MenuItem Header="Rename"
-                                                      Click="RenameLeaf_Click"/>
-                                        </ContextMenu>
-                                    </TextBlock.ContextMenu>
-                                </TextBlock>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="⚠ "
+                                               Foreground="#FFCC00"
+                                               FontSize="11"
+                                               VerticalAlignment="Center"
+                                               ToolTip="Missing Year Label"
+                                               Visibility="{Binding HasYearWarning,
+                                                   Converter={StaticResource BoolToVisibility}}"/>
+                                    <TextBlock Text="{Binding DisplayName}"
+                                               Background="{Binding Background}"
+                                               Padding="2,1">
+                                        <TextBlock.ContextMenu>
+                                            <ContextMenu>
+                                                <MenuItem Header="Rename"
+                                                          Click="RenameLeaf_Click"/>
+                                            </ContextMenu>
+                                        </TextBlock.ContextMenu>
+                                    </TextBlock>
+                                </StackPanel>
                             </DataTemplate>
                         </TreeView.Resources>
                     </TreeView>

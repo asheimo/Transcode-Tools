@@ -3,7 +3,9 @@
 // ============================================================
 
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.IO;
+using System.Text.RegularExpressions;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
@@ -174,10 +176,9 @@ public partial class MainWindow : Window
         _inputDirectory = folder;
         AppSettings.Instance.AddRecentInput(folder);
         AppSettings.Instance.Save();
-        RefreshHistoryDropdowns();
-
-        // Set Text after refreshing so the ComboBox shows the selected path
-        InputDirectoryBox.Text = folder;
+        // Pass the current folder so RefreshHistoryDropdowns sets Text
+        // inside the suppress block, preventing a second SelectionChanged.
+        RefreshHistoryDropdowns(inputText: folder);
         LoadMovieFolders(folder);
 
         FileTree.Items.Clear();
@@ -189,24 +190,27 @@ public partial class MainWindow : Window
     {
         AppSettings.Instance.AddRecentOutput(folder);
         AppSettings.Instance.Save();
-        RefreshHistoryDropdowns();
-
-        OutputDirectoryBox.Text = folder;
+        RefreshHistoryDropdowns(outputText: folder);
     }
 
     // Repopulates both ComboBox ItemsSource lists from saved history.
     // Uses a suppress flag to prevent SelectionChanged firing during the update.
-    private void RefreshHistoryDropdowns()
+    // inputText/outputText: when provided, sets the ComboBox text inside the
+    // suppress block so the assignment never fires SelectionChanged outside it.
+    private void RefreshHistoryDropdowns(string? inputText = null, string? outputText = null)
     {
         _suppressDirectorySelection = true;
 
-        var currentInput  = InputDirectoryBox.Text;
-        var currentOutput = OutputDirectoryBox.Text;
+        var currentInput  = inputText  ?? InputDirectoryBox.Text;
+        var currentOutput = outputText ?? OutputDirectoryBox.Text;
 
         InputDirectoryBox.ItemsSource  = AppSettings.Instance.RecentInputFolders.ToList();
         OutputDirectoryBox.ItemsSource = AppSettings.Instance.RecentOutputFolders.ToList();
 
-        // Restore the displayed text — ItemsSource reset clears it
+        // Set text inside the suppress block. We do NOT clear SelectedItem here
+        // as that also clears Text on an editable ComboBox. Instead, setting
+        // Text directly is sufficient — the suppress flag prevents SelectionChanged
+        // from firing while we are inside this method.
         InputDirectoryBox.Text  = currentInput;
         OutputDirectoryBox.Text = currentOutput;
 
@@ -222,9 +226,20 @@ public partial class MainWindow : Window
     // ── Load movie folders into the left list ────────────────────────
     // Scans the input directory for subfolders, skipping "Remux" and
     // "Transcode" which are used for settings files, not source material.
+    // Regex to detect a (YYYY) year pattern anywhere in a folder name.
+    private static readonly Regex YearPattern = new(@"\(\d{4}\)", RegexOptions.Compiled);
+
+    // Regex to detect an existing resolution suffix e.g. -1080p, -2160p, -480p, -720p, -4K
+    private static readonly Regex ResolutionSuffix =
+        new(@"-(4K|2160p|1080p|720p|480p|576p)$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private void LoadMovieFolders(string rootPath)
     {
         FolderList.Items.Clear();
+
+        // Collect movie FolderNodes separately so we can run corrections
+        // after the tree is built. TV show nodes are added directly.
+        var movieNodes = new List<FolderNode>();
 
         try
         {
@@ -271,11 +286,14 @@ public partial class MainWindow : Window
                 else
                 {
                     // ── Movie folder node ─────────────────────────────
-                    FolderList.Items.Add(new FolderNode
+                    var node = new FolderNode
                     {
-                        DisplayName = folderName,
-                        FolderPath  = folderName
-                    });
+                        DisplayName    = folderName,
+                        FolderPath     = folderName,
+                        HasYearWarning = !YearPattern.IsMatch(folderName)
+                    };
+                    FolderList.Items.Add(node);
+                    movieNodes.Add(node);
                 }
             }
         }
@@ -283,6 +301,387 @@ public partial class MainWindow : Window
         {
             MessageBox.Show($"Could not read directory:\n{ex.Message}", "Error",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        // ── Load-time order: title case first, resolution append second ──
+        // Title case runs first so the resolution suffix (e.g. -1080p) is
+        // never passed through ToTitleCase and mangled to -1080P.
+        if (AppSettings.Instance.TitleCaseEnabled && movieNodes.Count > 0)
+            ApplyTitleCaseCorrections(rootPath, movieNodes);
+
+        if (AppSettings.Instance.ResolutionAppendEnabled && movieNodes.Count > 0)
+            ApplyResolutionAppendAsync(rootPath, movieNodes);
+    }
+
+    // ── Title Case Correction ─────────────────────────────────────────
+    // Applies ToTitleCase to the title portion of each movie folder name
+    // (split on last dash, title case the left side, preserve the right).
+    // Acronyms in the user-defined list are restored after ToTitleCase.
+    // A summary dialog lets the user review and selectively apply renames.
+    private void ApplyTitleCaseCorrections(string rootPath, List<FolderNode> movieNodes)
+    {
+        var ti       = new CultureInfo("en-US").TextInfo;
+        var acronyms = AppSettings.Instance.TitleCaseAcronyms;
+
+        // Build list of proposed renames
+        var proposals = new List<(FolderNode Node, string OldName, string NewName)>();
+
+        foreach (var node in movieNodes)
+        {
+            var folderName = node.FolderPath; // FolderPath == folder name for movies
+            var corrected  = ApplyTitleCaseToFolderName(folderName, ti, acronyms);
+
+            if (!corrected.Equals(folderName, StringComparison.Ordinal))
+                proposals.Add((node, folderName, corrected));
+        }
+
+        if (proposals.Count == 0) return;
+
+        // Show summary dialog — user can uncheck items they don't want renamed
+        ShowTitleCaseSummaryDialog(rootPath, proposals);
+    }
+
+    // Applies ToTitleCase to the title portion of a folder name.
+    // Splits on the last dash to preserve category labels (e.g. "-featurette").
+    // Restores acronyms that ToTitleCase would mangle.
+    private static string ApplyTitleCaseToFolderName(
+        string name, TextInfo ti, List<string> acronyms)
+    {
+        // Split on last dash — preserve label if it's a known category
+        // For folder names we don't strip categories, but we do preserve
+        // anything after the last dash as-is.
+        var lastDash = name.LastIndexOf('-');
+        string titlePart, labelPart;
+
+        if (lastDash > 0)
+        {
+            titlePart = name.Substring(0, lastDash);
+            labelPart = name.Substring(lastDash); // includes the dash
+        }
+        else
+        {
+            titlePart = name;
+            labelPart = "";
+        }
+
+        var corrected = ti.ToTitleCase(titlePart.ToLower());
+
+        // Restore acronyms — ToTitleCase will have title-cased them
+        foreach (var acronym in acronyms)
+        {
+            // Replace title-cased version back with the correct form
+            var titleCased = ti.ToTitleCase(acronym.ToLower());
+            corrected = Regex.Replace(corrected, Regex.Escape(titleCased),
+                acronym, RegexOptions.IgnoreCase);
+        }
+
+        return corrected + labelPart;
+    }
+
+    // Shows the title case summary dialog with per-item checkboxes.
+    // Applies only the checked renames on OK.
+    private void ShowTitleCaseSummaryDialog(
+        string rootPath,
+        List<(FolderNode Node, string OldName, string NewName)> proposals)
+    {
+        var win = new Window
+        {
+            Title                 = "Title Case Corrections",
+            Width                 = 700,
+            Height                = 400,
+            MinWidth              = 500,
+            MinHeight             = 200,
+            Owner                 = this,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Background            = (System.Windows.Media.Brush)FindResource("WindowBg"),
+            ResizeMode            = ResizeMode.CanResizeWithGrip,
+            ShowInTaskbar         = false
+        };
+
+        var outer = new Grid { Margin = new Thickness(12) };
+        outer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        outer.RowDefinitions.Add(new RowDefinition { Height = new GridLength(8) });
+        outer.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        outer.RowDefinitions.Add(new RowDefinition { Height = new GridLength(8) });
+        outer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+        var header = new TextBlock
+        {
+            Text         = "The following movie folder names will be renamed on disk to correct their capitalisation. Uncheck any you want to leave unchanged, then click Apply. Click Cancel to skip all renames.",
+            Foreground   = (System.Windows.Media.Brush)FindResource("ForegroundColor"),
+            FontSize     = 13,
+            TextWrapping = TextWrapping.Wrap
+        };
+        Grid.SetRow(header, 0);
+
+        var scroll = new ScrollViewer
+        {
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto
+        };
+        var stack = new StackPanel();
+
+        // Build checkbox list — each item shows "OldName → NewName"
+        var checkBoxes = new List<(CheckBox Cb, FolderNode Node, string OldName, string NewName)>();
+        foreach (var (node, oldName, newName) in proposals)
+        {
+            var cb = new CheckBox
+            {
+                IsChecked  = true,
+                Margin     = new Thickness(0, 3, 0, 3),
+                Foreground = (System.Windows.Media.Brush)FindResource("ForegroundColor"),
+                FontSize   = 12
+            };
+            var panel = new StackPanel { Orientation = Orientation.Horizontal };
+            panel.Children.Add(new TextBlock
+            {
+                Text       = oldName,
+                Foreground = (System.Windows.Media.Brush)FindResource("SubtleForeground"),
+                FontSize   = 12,
+                Margin     = new Thickness(0, 0, 6, 0)
+            });
+            panel.Children.Add(new TextBlock
+            {
+                Text       = "→",
+                Foreground = (System.Windows.Media.Brush)FindResource("SubtleForeground"),
+                FontSize   = 12,
+                Margin     = new Thickness(0, 0, 6, 0)
+            });
+            panel.Children.Add(new TextBlock
+            {
+                Text       = newName,
+                Foreground = (System.Windows.Media.Brush)FindResource("ForegroundColor"),
+                FontSize   = 12,
+                FontWeight = FontWeights.SemiBold
+            });
+            cb.Content = panel;
+            stack.Children.Add(cb);
+            checkBoxes.Add((cb, node, oldName, newName));
+        }
+        scroll.Content = stack;
+        Grid.SetRow(scroll, 2);
+
+        var btnPanel = new StackPanel
+        {
+            Orientation         = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right
+        };
+        var cancelBtn = new Button
+        {
+            Content = "Cancel",
+            Width   = 80,
+            Margin  = new Thickness(0, 0, 8, 0),
+            Style   = (Style)FindResource("FlatButton")
+        };
+        var okBtn = new Button
+        {
+            Content   = "Apply",
+            Width     = 80,
+            Style     = (Style)FindResource("AccentButton"),
+            IsDefault = true
+        };
+        btnPanel.Children.Add(cancelBtn);
+        btnPanel.Children.Add(okBtn);
+        Grid.SetRow(btnPanel, 4);
+
+        outer.Children.Add(header);
+        outer.Children.Add(scroll);
+        outer.Children.Add(btnPanel);
+        win.Content = outer;
+
+        cancelBtn.Click += (_, _) => { win.DialogResult = false; win.Close(); };
+
+        // Capture checked state before closing — accessing IsChecked on controls
+        // after the window closes may return unexpected values.
+        List<(FolderNode Node, string OldName, string NewName)>? toApply = null;
+
+        okBtn.Click += (_, _) =>
+        {
+            toApply = checkBoxes
+                .Where(x => x.Cb.IsChecked == true)
+                .Select(x => (x.Node, x.OldName, x.NewName))
+                .ToList();
+            win.DialogResult = true;
+            win.Close();
+        };
+
+        if (win.ShowDialog() != true) return;
+        if (toApply == null || toApply.Count == 0) return;
+
+        // Apply checked renames
+        foreach (var (node, oldName, newName) in toApply)
+        {
+            var oldPath = Path.Combine(rootPath, oldName);
+            var newPath = Path.Combine(rootPath, newName);
+
+            if (!Directory.Exists(oldPath)) continue;
+            // On Windows paths are case-insensitive, so Directory.Exists(newPath)
+            // returns true even when oldPath and newPath differ only in case.
+            // Only skip if newPath exists AND is genuinely different from oldPath.
+            if (Directory.Exists(newPath) &&
+                !oldPath.Equals(newPath, StringComparison.OrdinalIgnoreCase)) continue;
+
+            try
+            {
+                // Windows is case-insensitive so Directory.Move fails when source
+                // and destination differ only in case. Use a temp name as an
+                // intermediate step to force the rename through.
+                if (oldPath.Equals(newPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    var tempPath = newPath + "_tmp_rename_";
+                    Directory.Move(oldPath, tempPath);
+                    Directory.Move(tempPath, newPath);
+                }
+                else
+                {
+                    Directory.Move(oldPath, newPath);
+                }
+                node.DisplayName = newName;
+                node.FolderPath  = newName;
+                node.HasYearWarning = !YearPattern.IsMatch(newName);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Could not rename folder:\n{oldName} → {newName}\n{ex.Message}",
+                    "Rename Failed", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+    }
+
+    // ── Resolution Append ─────────────────────────────────────────────
+    // Probes main title .mkv files (those matching the folder name) with
+    // ffprobe and appends the resolution label if one is not already present.
+    // Runs async so the UI stays responsive during probing.
+    private async void ApplyResolutionAppendAsync(string rootPath, List<FolderNode> movieNodes)
+    {
+        var verifyAlways = AppSettings.Instance.ResolutionVerifyAlways;
+
+        foreach (var node in movieNodes)
+        {
+            var folderName = node.FolderPath;
+            var folderPath = Path.Combine(rootPath, folderName);
+
+            try
+            {
+                var files = Directory.GetFiles(folderPath, "*.mkv");
+
+                foreach (var filePath in files)
+                {
+                    var fileName    = Path.GetFileName(filePath);
+                    var nameNoExt   = Path.GetFileNameWithoutExtension(fileName);
+
+                    // Strip resolution suffixes and edition tags to get the
+                    // bare title for comparison against the folder name.
+                    var stripped = ResolutionSuffix.Replace(nameNoExt, "");
+                    stripped = Regex.Replace(stripped, @"\s*\{edition-[^}]+\}", "",
+                        RegexOptions.IgnoreCase).Trim();
+
+                    // Only process files whose bare title matches the folder name
+                    if (!stripped.Equals(folderName.Trim(),
+                        StringComparison.OrdinalIgnoreCase)) continue;
+
+                    // Skip if resolution already present and verify-always is off
+                    var hasResolution = ResolutionSuffix.IsMatch(nameNoExt);
+                    if (hasResolution && !verifyAlways) continue;
+
+                    // Probe the file to get pixel height
+                    var probe = await FfprobeService.ProbeFileAsync(filePath);
+                    var video = probe.RemuxVideo.FirstOrDefault();
+                    if (video == null) continue;
+
+                    // Parse height from resolution string e.g. "1920x1080"
+                    var resParts = video.Resolution.Split('x');
+                    if (resParts.Length < 2 ||
+                        !int.TryParse(resParts[1], out var height)) continue;
+
+                    var label = DeriveResolutionLabel(height);
+                    if (string.IsNullOrEmpty(label)) continue;
+
+                    // If verifying always and resolution already matches, skip
+                    if (hasResolution)
+                    {
+                        var existingMatch = ResolutionSuffix.Match(nameNoExt);
+                        if (existingMatch.Success &&
+                            existingMatch.Value.TrimStart('-')
+                                .Equals(label, StringComparison.OrdinalIgnoreCase))
+                            continue;
+                    }
+
+                    // Build new filename: insert resolution before edition tag if present
+                    string newNameNoExt;
+                    var editionMatch = Regex.Match(nameNoExt,
+                        @"(\s*\{edition-[^}]+\})$", RegexOptions.IgnoreCase);
+
+                    if (editionMatch.Success)
+                    {
+                        // Insert before edition: "Title (Year) {edition-X}" →
+                        //                        "Title (Year) {edition-X}-1080p"
+                        // Per Plex docs edition comes before resolution suffix
+                        newNameNoExt = nameNoExt + "-" + label;
+                    }
+                    else
+                    {
+                        // Strip any existing resolution suffix first if verify-always
+                        var bare = hasResolution
+                            ? ResolutionSuffix.Replace(nameNoExt, "")
+                            : nameNoExt;
+                        newNameNoExt = bare + "-" + label;
+                    }
+
+                    var newFileName = newNameNoExt + ".mkv";
+                    var newFilePath = Path.Combine(folderPath, newFileName);
+
+                    if (File.Exists(newFilePath)) continue;
+
+                    try
+                    {
+                        File.Move(filePath, newFilePath);
+                        RenameSettingsFiles(rootPath, folderName, fileName, newFileName);
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show(
+                            $"Could not append resolution to:\n{fileName}\n{ex.Message}",
+                            "Resolution Append Failed",
+                            MessageBoxButton.OK, MessageBoxImage.Warning);
+                    }
+                }
+            }
+            catch { /* Skip folders we cannot read */ }
+        }
+    }
+
+    // Maps ffprobe pixel height to a resolution label string.
+    private static string DeriveResolutionLabel(int height) => height switch
+    {
+        >= 2160 => "2160p",
+        >= 1080 => "1080p",
+        >= 720  => "720p",
+        >= 576  => "576p",
+        >= 480  => "480p",
+        _       => ""
+    };
+
+    // Renames matching .txt settings files in both Remux and Transcode
+    // folders when a .mkv file is renamed. Shared by title case and
+    // resolution append rename operations.
+    private void RenameSettingsFiles(
+        string rootPath, string folderName,
+        string oldFileName, string newFileName)
+    {
+        var oldTxt = Path.GetFileNameWithoutExtension(oldFileName) + ".txt";
+        var newTxt = Path.GetFileNameWithoutExtension(newFileName) + ".txt";
+
+        foreach (var mode in new[] { "Remux", "Transcode" })
+        {
+            var settingsDir = Path.Combine(rootPath, mode, folderName);
+            var oldTxtPath  = Path.Combine(settingsDir, oldTxt);
+            var newTxtPath  = Path.Combine(settingsDir, newTxt);
+
+            if (!File.Exists(oldTxtPath)) continue;
+
+            try   { File.Move(oldTxtPath, newTxtPath); }
+            catch { /* Best effort — don't block the rename */ }
         }
     }
 
@@ -353,12 +752,14 @@ public partial class MainWindow : Window
 
                 var leaf = new FileLeafNode
                 {
-                    DisplayName = displayName,
-                    FileName    = fileName,
-                    GroupKey    = category,
-                    Background  = hasSettings
+                    DisplayName    = displayName,
+                    FileName       = fileName,
+                    GroupKey       = category,
+                    Background     = hasSettings
                         ? System.Windows.Media.Brushes.Green
-                        : System.Windows.Media.Brushes.Transparent
+                        : System.Windows.Media.Brushes.Transparent,
+                    // Only flag year warning on main title files (no category suffix)
+                    HasYearWarning = category == null && !YearPattern.IsMatch(nameNoExt)
                 };
 
                 if (category == null)

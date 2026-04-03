@@ -41,7 +41,11 @@ public partial class UserPreferences : Window
         string MKVMerge_Options,
         string RoboCopy_Defaults,
         bool   AlwaysConvertToHevc,
-        int    RecentFolderHistorySize
+        int    RecentFolderHistorySize,
+        bool   TitleCaseEnabled,
+        string TitleCaseAcronyms,
+        bool   ResolutionAppendEnabled,
+        bool   ResolutionVerifyAlways
     );
 
     private readonly SettingsSnapshot _snapshot;
@@ -65,7 +69,11 @@ public partial class UserPreferences : Window
             s.MKVMerge_Options,
             s.RoboCopy_Defaults,
             s.AlwaysConvertToHevc,
-            s.RecentFolderHistorySize
+            s.RecentFolderHistorySize,
+            s.TitleCaseEnabled,
+            string.Join(",", s.TitleCaseAcronyms),
+            s.ResolutionAppendEnabled,
+            s.ResolutionVerifyAlways
         );
 
         // Load the current saved settings into the text boxes.
@@ -115,6 +123,10 @@ public partial class UserPreferences : Window
         TbxRoboCopyDefaults.Text      = s.RoboCopy_Defaults;
         ChkAlwaysConvertToHevc.IsChecked = s.AlwaysConvertToHevc;
         TbxHistorySize.Text               = s.RecentFolderHistorySize.ToString();
+        ChkTitleCase.IsChecked            = s.TitleCaseEnabled;
+        TbxAcronyms.Text                  = string.Join(", ", s.TitleCaseAcronyms);
+        ChkResolutionAppend.IsChecked     = s.ResolutionAppendEnabled;
+        ChkResolutionVerifyAlways.IsChecked = s.ResolutionVerifyAlways;
     }
 
     // Writes all text box values back to AppSettings and saves to disk.
@@ -135,6 +147,17 @@ public partial class UserPreferences : Window
         // Parse history size — fall back to current value if the box is empty or invalid
         if (int.TryParse(TbxHistorySize.Text, out var histSize) && histSize > 0)
             s.RecentFolderHistorySize = histSize;
+
+        s.TitleCaseEnabled        = ChkTitleCase.IsChecked == true;
+        s.ResolutionAppendEnabled = ChkResolutionAppend.IsChecked == true;
+        s.ResolutionVerifyAlways  = ChkResolutionVerifyAlways.IsChecked == true;
+
+        // Parse acronym list — split on commas, trim whitespace, remove empties
+        s.TitleCaseAcronyms = TbxAcronyms.Text
+            .Split(',')
+            .Select(a => a.Trim())
+            .Where(a => !string.IsNullOrEmpty(a))
+            .ToList();
 
         // Persist to disk — writes settings.json in AppData\Roaming\TranscodeTools
         s.Save();
@@ -186,6 +209,11 @@ public partial class UserPreferences : Window
         s.RoboCopy_Defaults       = _snapshot.RoboCopy_Defaults;
         s.AlwaysConvertToHevc        = _snapshot.AlwaysConvertToHevc;
         s.RecentFolderHistorySize    = _snapshot.RecentFolderHistorySize;
+        s.TitleCaseEnabled           = _snapshot.TitleCaseEnabled;
+        s.TitleCaseAcronyms          = _snapshot.TitleCaseAcronyms
+            .Split(',').Select(a => a.Trim()).Where(a => !string.IsNullOrEmpty(a)).ToList();
+        s.ResolutionAppendEnabled    = _snapshot.ResolutionAppendEnabled;
+        s.ResolutionVerifyAlways     = _snapshot.ResolutionVerifyAlways;
 
         DialogResult = false;
         Close();

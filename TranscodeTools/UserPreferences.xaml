@@ -220,6 +220,57 @@
                     </Grid>
                 </Border>
 
+                <!-- ── FILE NAME CORRECTIONS section ─────────────── -->
+                <TextBlock Text="FILE NAME CORRECTIONS"
+                           Style="{StaticResource SectionHeader}"/>
+
+                <Border Background="{DynamicResource SurfaceBg}"
+                        BorderBrush="{DynamicResource BorderColor}"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Padding="12,8">
+                    <StackPanel>
+
+                        <!-- Title Case -->
+                        <CheckBox x:Name="ChkTitleCase"
+                                  Content="Auto Title Case on Folder Load"
+                                  HorizontalAlignment="Left"
+                                  Margin="0,4,0,4"/>
+                        <TextBlock Text="Corrects folder and file display names to Title Case on load. A confirmation dialog lets you review and selectively apply changes."
+                                   Foreground="{DynamicResource SubtleForeground}"
+                                   FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Margin="22,0,0,8"/>
+
+                        <TextBlock Text="Acronym List (comma-separated, e.g. HDR,UHD,IMAX):"
+                                   Foreground="{DynamicResource ForegroundColor}"
+                                   FontSize="12"
+                                   Margin="22,0,0,4"/>
+                        <TextBox x:Name="TbxAcronyms"
+                                 Margin="22,0,0,12"
+                                 VerticalContentAlignment="Center"/>
+
+                        <!-- Resolution Append -->
+                        <CheckBox x:Name="ChkResolutionAppend"
+                                  Content="Auto-Append Resolution to Movie Filenames"
+                                  HorizontalAlignment="Left"
+                                  Margin="0,4,0,4"/>
+                        <TextBlock Text="Probes movie files with ffprobe on folder load and appends resolution label (e.g. -1080p) to filenames that lack one. Movies only — not TV."
+                                   Foreground="{DynamicResource SubtleForeground}"
+                                   FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Margin="22,0,0,4"/>
+
+                        <CheckBox x:Name="ChkResolutionVerifyAlways"
+                                  HorizontalAlignment="Left"
+                                  Content="Always verify via ffprobe (slower — probes all files including those with existing resolution suffix)"
+                                  Margin="22,4,0,8"
+                                  Foreground="{DynamicResource SubtleForeground}"
+                                  FontSize="11"/>
+
+                    </StackPanel>
+                </Border>
+
             </StackPanel>
         </ScrollViewer>
     </DockPanel>

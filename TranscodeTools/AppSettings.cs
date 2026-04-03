@@ -73,6 +73,25 @@ public sealed class AppSettings
     // robocopied, requiring the user to explicitly save settings first.
     public bool AlwaysConvertToHevc { get; set; } = true;
 
+    // ── File Name Corrections ───────────────────────────────────────
+    // Title Case: auto-corrects display names on folder load.
+    // Acronym list prevents known uppercase terms being mangled by ToTitleCase.
+    public bool TitleCaseEnabled { get; set; } = true;
+    public List<string> TitleCaseAcronyms { get; set; } = new()
+    {
+        "HDR", "HDR10", "HDR10+", "UHD", "SDR", "SDH",
+        "DTS", "AC3", "EAC3", "AAC", "FLAC", "TrueHD", "Atmos",
+        "HEVC", "AVC", "VC1", "H264", "H265",
+        "REMUX", "IMAX", "3D", "4K"
+    };
+
+    // Resolution Append: probes main title files with ffprobe and appends
+    // resolution label (e.g. -1080p, -2160p) to filenames that lack one.
+    // ResolutionVerifyAlways: when true, probes even files that appear to
+    // already have a resolution suffix. Affects performance — default off.
+    public bool ResolutionAppendEnabled  { get; set; } = true;
+    public bool ResolutionVerifyAlways   { get; set; } = false;
+
     // ── Recent folder history ────────────────────────────────────────
     // Stores the most recently used input and output folder paths so the
     // user can quickly reload them from a dropdown without browsing again.

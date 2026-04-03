@@ -77,6 +77,15 @@ public class FileLeafNode : FileTreeNode
     // e.g. "deleted" for a file named "Something-deleted.mkv"
     // null for "Casino Royale (2006).mkv"
     public string? GroupKey { get; set; }
+
+    // Set to true when the filename has no (YYYY) year pattern.
+    // Drives the warning indicator in the FileLeafNode DataTemplate.
+    private bool _hasYearWarning;
+    public bool HasYearWarning
+    {
+        get => _hasYearWarning;
+        set { _hasYearWarning = value; OnPropertyChanged(); }
+    }
 }
 
 // ── FOLDER LIST NODES (left panel) ───────────────────────────────────
@@ -92,6 +101,15 @@ public class FileLeafNode : FileTreeNode
 public class FolderNode : FileTreeNode
 {
     public string FolderPath { get; set; } = "";
+
+    // Set to true when the folder name has no (YYYY) year pattern.
+    // Drives the warning indicator in the FolderNode DataTemplate.
+    private bool _hasYearWarning;
+    public bool HasYearWarning
+    {
+        get => _hasYearWarning;
+        set { _hasYearWarning = value; OnPropertyChanged(); }
+    }
 }
 
 // ── TV show node ──────────────────────────────────────────────────────
