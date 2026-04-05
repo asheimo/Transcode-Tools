@@ -186,7 +186,7 @@ public partial class RunRemux : Window
                     Content    = nameNoExt,
                     FontSize   = 12,
                     Foreground = (Brush)Application.Current.FindResource("ForegroundColor"),
-                    Background = hasSettings ? Brushes.Green : Brushes.Transparent,
+                    Background = hasSettings ? Brushes.Green : Brushes.White,
                     Tag        = fileNode
                 };
 
