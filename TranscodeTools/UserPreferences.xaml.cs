@@ -41,6 +41,8 @@ public partial class UserPreferences : Window
         string MKVMerge_Options,
         string RoboCopy_Defaults,
         bool   AlwaysConvertToHevc,
+        string DefaultPreset,
+        string NvencQualityFlags,
         int    RecentFolderHistorySize,
         bool   TitleCaseEnabled,
         string TitleCaseAcronyms,
@@ -69,6 +71,8 @@ public partial class UserPreferences : Window
             s.MKVMerge_Options,
             s.RoboCopy_Defaults,
             s.AlwaysConvertToHevc,
+            s.DefaultPreset,
+            s.NvencQualityFlags,
             s.RecentFolderHistorySize,
             s.TitleCaseEnabled,
             string.Join(",", s.TitleCaseAcronyms),
@@ -121,7 +125,9 @@ public partial class UserPreferences : Window
         TbxMKVMergeDefaults.Text      = s.MKVMerge_Defaults;
         TbxMKVMergeOptions.Text       = s.MKVMerge_Options;
         TbxRoboCopyDefaults.Text      = s.RoboCopy_Defaults;
-        ChkAlwaysConvertToHevc.IsChecked = s.AlwaysConvertToHevc;
+        ChkAlwaysConvertToHevc.IsChecked  = s.AlwaysConvertToHevc;
+        CbxDefaultPreset.SelectedItem     = s.DefaultPreset;
+        TbxNvencQualityFlags.Text         = s.NvencQualityFlags;
         TbxHistorySize.Text               = s.RecentFolderHistorySize.ToString();
         ChkTitleCase.IsChecked            = s.TitleCaseEnabled;
         TbxAcronyms.Text                  = string.Join(", ", s.TitleCaseAcronyms);
@@ -144,6 +150,8 @@ public partial class UserPreferences : Window
         s.MKVMerge_Options        = TbxMKVMergeOptions.Text;
         s.RoboCopy_Defaults       = TbxRoboCopyDefaults.Text;
         s.AlwaysConvertToHevc     = ChkAlwaysConvertToHevc.IsChecked == true;
+        s.DefaultPreset           = CbxDefaultPreset.SelectedItem as string ?? "p5";
+        s.NvencQualityFlags       = TbxNvencQualityFlags.Text;
         // Parse history size — fall back to current value if the box is empty or invalid
         if (int.TryParse(TbxHistorySize.Text, out var histSize) && histSize > 0)
             s.RecentFolderHistorySize = histSize;
@@ -208,6 +216,8 @@ public partial class UserPreferences : Window
         s.MKVMerge_Options        = _snapshot.MKVMerge_Options;
         s.RoboCopy_Defaults       = _snapshot.RoboCopy_Defaults;
         s.AlwaysConvertToHevc        = _snapshot.AlwaysConvertToHevc;
+        s.DefaultPreset              = _snapshot.DefaultPreset;
+        s.NvencQualityFlags          = _snapshot.NvencQualityFlags;
         s.RecentFolderHistorySize    = _snapshot.RecentFolderHistorySize;
         s.TitleCaseEnabled           = _snapshot.TitleCaseEnabled;
         s.TitleCaseAcronyms          = _snapshot.TitleCaseAcronyms

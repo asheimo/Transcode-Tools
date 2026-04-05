@@ -225,7 +225,7 @@ public static class FfprobeService
             // Default to "hevc (default)" — hevc is the preferred output format.
             OutputFormat = "hevc (default)",
             FrameRate    = fps,
-            Preset       = "p5"
+            Preset       = AppSettings.Instance.DefaultPreset
         };
     }
 

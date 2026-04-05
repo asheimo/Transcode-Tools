@@ -377,9 +377,9 @@ public partial class RunRemux : Window
         {
             // ── Transcode: no settings file yet — build from ffprobe defaults ──
             // Probe the file, build a command using default track settings
-            // (hevc, preset p4, all audio Keep), save it to disk for history,
-            // then run it. This mirrors what the UI would show on a fresh file
-            // selection with no changes made.
+            // (hevc, preset as configured in User Preferences, all audio Keep),
+            // save it to disk for history, then run it. This mirrors what the UI
+            // would show on a fresh file selection with no changes made.
             try
             {
                 var inputFile = Path.Combine(_inputDirectory, file.FolderName, file.FileName);
@@ -438,7 +438,7 @@ public partial class RunRemux : Window
     //
     // Example output:
     //   Input:    Casino Royale (2006).mkv
-    //   Video:    0, h264, 1920x1080, 23.98fps → hevc_nvenc, preset p4
+    //   Video:    0, h264, 1920x1080, 23.98fps → hevc_nvenc, preset p5
     //   Audio:    1, DTS 5.1 768k → copy
     //   Audio:    2, DTS-HD MA 5.1 → copy
     //   Audio:    3, AC3 stereo 224k → copy
@@ -469,7 +469,7 @@ public partial class RunRemux : Window
 
             // Video encode codec: find -c:v after -i
             var encodeCodec = "hevc_nvenc";
-            var preset      = "p5";
+            var preset      = AppSettings.Instance.DefaultPreset;
             var inputIndex  = Array.IndexOf(tokens, "-i");
             if (inputIndex >= 0)
             {

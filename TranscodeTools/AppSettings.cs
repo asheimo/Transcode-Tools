@@ -73,6 +73,14 @@ public sealed class AppSettings
     // robocopied, requiring the user to explicitly save settings first.
     public bool AlwaysConvertToHevc { get; set; } = true;
 
+    // ── NVENC defaults ───────────────────────────────────────────────
+    // DefaultPreset: the preset applied to new files on load. "None" omits
+    // the -preset flag entirely, letting NVENC choose automatically.
+    // NvencQualityFlags: the quality flag string appended after -preset.
+    // Defaults match the confirmed optimal pixel-tested settings.
+    public string DefaultPreset      { get; set; } = "p5";
+    public string NvencQualityFlags  { get; set; } = "-cq 19 -spatial-aq 1 -aq-strength 10";
+
     // ── File Name Corrections ───────────────────────────────────────
     // Title Case: auto-corrects display names on folder load.
     // Acronym list prevents known uppercase terms being mangled by ToTitleCase.

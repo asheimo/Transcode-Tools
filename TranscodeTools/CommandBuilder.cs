@@ -198,7 +198,7 @@ public static class CommandBuilder
         var useHevc     = video == null ||
             !video.OutputFormat.Equals("h.264", StringComparison.OrdinalIgnoreCase);
         var encodeCodec = useHevc ? "hevc_nvenc" : "h264_nvenc";
-        var preset      = video?.Preset ?? "p5";
+        var preset      = video?.Preset ?? AppSettings.Instance.DefaultPreset;
 
         // ── Determine hardware decoder ────────────────────────────────
         // App maps source codec_name to the appropriate NVDEC decoder.
@@ -246,13 +246,17 @@ public static class CommandBuilder
         // Video encode
         sb.Append(" -map 0:v:0");
         sb.Append($" -c:v {encodeCodec}");
-        sb.Append($" -preset {preset}");
+        // Only emit -preset if the preset is not set to "None".
+        // "None" lets NVENC choose its own preset automatically.
+        if (!preset.Equals("None", StringComparison.OrdinalIgnoreCase))
+            sb.Append($" -preset {preset}");
 
-        // Quality flags — confirmed optimal via pixel-level testing on RTX 3060:
-        //   -cq 19          constant quality mode; cq16/17 indistinguishable from cq19
-        //   -spatial-aq 1   enable spatial adaptive quantisation
-        //   -aq-strength 10 maximum AQ strength — sweet spot for detail retention
-        sb.Append(" -cq 19 -spatial-aq 1 -aq-strength 10");
+        // Quality flags — sourced from User Preferences (NVENC Quality Flags field).
+        // Defaults to confirmed optimal pixel-tested settings:
+        //   -cq 19 -spatial-aq 1 -aq-strength 10
+        var qualityFlags = AppSettings.Instance.NvencQualityFlags;
+        if (!string.IsNullOrWhiteSpace(qualityFlags))
+            sb.Append($" {qualityFlags.Trim()}");
 
         if (needs10bit)
         {

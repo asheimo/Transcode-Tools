@@ -66,6 +66,7 @@
             <sys:String>h.264</sys:String>
         </x:Array>
         <x:Array x:Key="VideoPresetOptions" Type="sys:String">
+            <sys:String>None</sys:String>
             <sys:String>p1</sys:String>
             <sys:String>p2</sys:String>
             <sys:String>p3</sys:String>
@@ -547,7 +548,7 @@
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
-                                <!-- Preset: p1=fastest/lowest quality through p7=slowest/highest quality -->
+                                <!-- Preset: None omits the -preset flag entirely; p1=fastest through p7=slowest/highest quality -->
                                 <GridViewColumn Header="Preset" Width="90">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>

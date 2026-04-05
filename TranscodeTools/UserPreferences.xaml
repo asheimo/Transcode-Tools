@@ -12,6 +12,7 @@
 <Window x:Class="TranscodeTools.UserPreferences"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:sys="clr-namespace:System;assembly=mscorlib"
         Title="User Preferences"
         Width="700" Height="620"
         MinWidth="600" MinHeight="500"
@@ -157,6 +158,8 @@
                             <RowDefinition Height="36"/>
                             <RowDefinition Height="36"/>
                             <RowDefinition Height="36"/>
+                            <RowDefinition Height="36"/>
+                            <RowDefinition Height="36"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
@@ -169,13 +172,32 @@
                         <TextBlock Grid.Row="2" Grid.Column="0" Text="RoboCopy Defaults"        Style="{StaticResource PrefLabel}"/>
                         <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TbxRoboCopyDefaults"    VerticalContentAlignment="Center"/>
 
+                        <!-- Default NVENC Preset -->
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Default NVENC Preset"  Style="{StaticResource PrefLabel}"/>
+                        <ComboBox  Grid.Row="3" Grid.Column="1" x:Name="CbxDefaultPreset"
+                                   VerticalContentAlignment="Center"
+                                   Width="80" HorizontalAlignment="Left">
+                            <sys:String>None</sys:String>
+                            <sys:String>p1</sys:String>
+                            <sys:String>p2</sys:String>
+                            <sys:String>p3</sys:String>
+                            <sys:String>p4</sys:String>
+                            <sys:String>p5</sys:String>
+                            <sys:String>p6</sys:String>
+                            <sys:String>p7</sys:String>
+                        </ComboBox>
+
+                        <!-- NVENC Quality Flags -->
+                        <TextBlock Grid.Row="4" Grid.Column="0" Text="NVENC Quality Flags"      Style="{StaticResource PrefLabel}"/>
+                        <TextBox   Grid.Row="4" Grid.Column="1" x:Name="TbxNvencQualityFlags"   VerticalContentAlignment="Center"/>
+
                         <!-- Always Convert to HEVC -->
-                        <StackPanel Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2"
+                        <StackPanel Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="2"
                                     Margin="0,8,0,4">
                             <CheckBox x:Name="ChkAlwaysConvertToHevc"
                                       Content="Always Convert to HEVC"
                                       HorizontalAlignment="Left"/>
-                            <TextBlock Text="When checked, files without saved settings will be transcoded using defaults (hevc, preset p4, all audio copy). When unchecked, files without saved settings will be robocopied."
+                            <TextBlock Text="When checked, files without saved settings will be transcoded using defaults (hevc, preset as configured above, all audio copy). When unchecked, files without saved settings will be robocopied."
                                        Foreground="{DynamicResource SubtleForeground}"
                                        FontSize="11"
                                        TextWrapping="Wrap"
@@ -263,7 +285,7 @@
 
                         <CheckBox x:Name="ChkResolutionVerifyAlways"
                                   HorizontalAlignment="Left"
-                                  Content="Always verify via ffprobe (slower — probes all files including those with existing resolution suffix)"
+                                  Content="Verify resolution of all files via ffprobe (slower — probes all files including those with existing resolution suffix)"
                                   Margin="22,4,0,8"
                                   Foreground="{DynamicResource SubtleForeground}"
                                   FontSize="11"/>
