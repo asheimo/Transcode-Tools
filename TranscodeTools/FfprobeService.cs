@@ -33,12 +33,13 @@ public static class FfprobeService
     // and immutability for free — good for a data-only return type.
     // In VB.NET: a Structure or Class with six List properties.
     public record ProbeResult(
-        List<RemuxVideoTrack>       RemuxVideo,
-        List<RemuxAudioTrack>       RemuxAudio,
-        List<RemuxSubtitleTrack>    RemuxSubtitle,
-        List<TranscodeVideoTrack>   TranscodeVideo,
-        List<TranscodeAudioTrack>   TranscodeAudio,
-        List<TranscodeSubtitleTrack> TranscodeSubtitle
+        List<RemuxVideoTrack>        RemuxVideo,
+        List<RemuxAudioTrack>        RemuxAudio,
+        List<RemuxSubtitleTrack>     RemuxSubtitle,
+        List<TranscodeVideoTrack>    TranscodeVideo,
+        List<TranscodeAudioTrack>    TranscodeAudio,
+        List<TranscodeSubtitleTrack> TranscodeSubtitle,
+        string                       Duration
     );
 
     // ── Main entry point ──────────────────────────────────────────────
@@ -132,7 +133,8 @@ public static class FfprobeService
 
         if (streams == null) return new ProbeResult(
             remuxVideo, remuxAudio, remuxSubtitle,
-            transcodeVideo, transcodeAudio, transcodeSubtitle);
+            transcodeVideo, transcodeAudio, transcodeSubtitle,
+            "");
 
         foreach (var stream in streams)
         {
@@ -167,7 +169,8 @@ public static class FfprobeService
 
         return new ProbeResult(
             remuxVideo, remuxAudio, remuxSubtitle,
-            transcodeVideo, transcodeAudio, transcodeSubtitle);
+            transcodeVideo, transcodeAudio, transcodeSubtitle,
+            ParseDuration(root));
     }
 
     // ── Per-track parsers ─────────────────────────────────────────────
@@ -222,7 +225,7 @@ public static class FfprobeService
             // Default to "hevc (default)" — hevc is the preferred output format.
             OutputFormat = "hevc (default)",
             FrameRate    = fps,
-            Preset       = "p4"
+            Preset       = "p5"
         };
     }
 
@@ -389,5 +392,22 @@ public static class FfprobeService
             return (bps / 1000).ToString();
 
         return "";
+    }
+
+    // Reads the container duration from the format node and returns it as
+    // h:mm:ss (e.g. "1:54:23"). ffprobe stores it as a decimal seconds string
+    // in root["format"]["duration"]. Returns an empty string if not present.
+    private static string ParseDuration(JsonNode root)
+    {
+        var raw = root["format"]?["duration"]?.GetValue<string>() ?? "";
+        if (string.IsNullOrEmpty(raw)) return "";
+
+        if (!double.TryParse(raw, System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture, out var totalSeconds))
+            return "";
+
+        var ts = TimeSpan.FromSeconds(totalSeconds);
+        // Format as h:mm:ss — hours are not zero-padded, minutes and seconds are.
+        return $"{(int)ts.TotalHours}:{ts.Minutes:D2}:{ts.Seconds:D2}";
     }
 }

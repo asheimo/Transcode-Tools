@@ -237,8 +237,8 @@ public class TranscodeVideoTrack : ObservableBase
 
     // Preset controls the nvenc quality/speed trade-off.
     // p1 = fastest/lowest quality, p7 = slowest/highest quality.
-    // Defaults to p4 — matches hevc_nvenc default and gives good speed.
-    private string _preset = "p4";
+    // Defaults to p5 — confirmed optimal in pixel-level testing.
+    private string _preset = "p5";
     public string Preset
     {
         get => _preset;

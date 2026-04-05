@@ -248,6 +248,12 @@ public static class CommandBuilder
         sb.Append($" -c:v {encodeCodec}");
         sb.Append($" -preset {preset}");
 
+        // Quality flags — confirmed optimal via pixel-level testing on RTX 3060:
+        //   -cq 19          constant quality mode; cq16/17 indistinguishable from cq19
+        //   -spatial-aq 1   enable spatial adaptive quantisation
+        //   -aq-strength 10 maximum AQ strength — sweet spot for detail retention
+        sb.Append(" -cq 19 -spatial-aq 1 -aq-strength 10");
+
         if (needs10bit)
         {
             // -highbitdepth true enables 10-bit output in hevc_nvenc.

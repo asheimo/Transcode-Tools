@@ -456,10 +456,12 @@ public partial class RunRemux : Window
 
             if (string.IsNullOrWhiteSpace(inputPath)) return;
 
-            AppendLog($"Input:    {Path.GetFileName(inputPath)}");
-
             // ── Probe the input file ──────────────────────────────────
             var probe = await FfprobeService.ProbeFileAsync(inputPath);
+
+            AppendLog($"Input:    {Path.GetFileName(inputPath)}");
+            if (!string.IsNullOrWhiteSpace(probe.Duration))
+                AppendLog($"Runtime:  {probe.Duration}");
 
             // ── Parse command decisions ───────────────────────────────
             // Read encode codec (after -i), preset, and per-track decisions.
@@ -467,7 +469,7 @@ public partial class RunRemux : Window
 
             // Video encode codec: find -c:v after -i
             var encodeCodec = "hevc_nvenc";
-            var preset      = "p4";
+            var preset      = "p5";
             var inputIndex  = Array.IndexOf(tokens, "-i");
             if (inputIndex >= 0)
             {

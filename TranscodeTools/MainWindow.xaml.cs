@@ -680,7 +680,20 @@ public partial class MainWindow : Window
 
             if (!File.Exists(oldTxtPath)) continue;
 
-            try   { File.Move(oldTxtPath, newTxtPath); }
+            try
+            {
+                // Windows is case-insensitive — two-step rename needed for case-only changes.
+                if (newTxt.Equals(oldTxt, StringComparison.OrdinalIgnoreCase))
+                {
+                    var tempPath = oldTxtPath + "_tmp_rename_";
+                    File.Move(oldTxtPath, tempPath);
+                    File.Move(tempPath, newTxtPath);
+                }
+                else
+                {
+                    File.Move(oldTxtPath, newTxtPath);
+                }
+            }
             catch { /* Best effort — don't block the rename */ }
         }
     }
@@ -698,6 +711,10 @@ public partial class MainWindow : Window
             SeasonNode s  => s.FolderPath,
             _             => null   // ShowNode or anything else — ignore
         };
+
+        // TV season files should never show the year warning — episode filenames
+        // don't follow the "Title (YYYY)" movie naming convention.
+        var isTvSeason = e.NewValue is SeasonNode;
 
         if (folderPath == null) return;
 
@@ -758,8 +775,10 @@ public partial class MainWindow : Window
                     Background     = hasSettings
                         ? System.Windows.Media.Brushes.Green
                         : System.Windows.Media.Brushes.Transparent,
-                    // Only flag year warning on main title files (no category suffix)
-                    HasYearWarning = category == null && !YearPattern.IsMatch(nameNoExt)
+                    // Only flag year warning on movie main-title files (no category suffix).
+                    // TV episode files under a SeasonNode are exempt — they don't follow
+                    // the "Title (YYYY)" movie naming convention.
+                    HasYearWarning = !isTvSeason && category == null && !YearPattern.IsMatch(nameNoExt)
                 };
 
                 if (category == null)
@@ -1398,8 +1417,9 @@ public partial class MainWindow : Window
             ? newNameNoExt
             : newNameNoExt + ".mkv";
 
-        // No-op if the name hasn't changed
-        if (newFileName.Equals(oldFileName, StringComparison.OrdinalIgnoreCase)) return;
+        // No-op if the name hasn't changed at all (case-sensitive comparison so
+        // that a case-only rename — e.g. "movie.mkv" → "Movie.mkv" — is allowed through).
+        if (newFileName.Equals(oldFileName, StringComparison.Ordinal)) return;
 
         var folderPath   = Path.Combine(_inputDirectory, _selectedMovieFolder);
         var oldFilePath  = Path.Combine(folderPath, oldFileName);
@@ -1413,7 +1433,10 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (File.Exists(newFilePath))
+        // Skip the conflict check for case-only renames — File.Exists is case-insensitive
+        // on Windows and would always fire a false positive in that case.
+        var isCaseOnlyRename = newFileName.Equals(oldFileName, StringComparison.OrdinalIgnoreCase);
+        if (!isCaseOnlyRename && File.Exists(newFilePath))
         {
             MessageBox.Show($"A file named \"{newFileName}\" already exists in this folder.",
                 "Rename Failed", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -1423,7 +1446,18 @@ public partial class MainWindow : Window
         // ── Rename the .mkv file ──────────────────────────────────────
         try
         {
-            File.Move(oldFilePath, newFilePath);
+            // Windows is case-insensitive so File.Move fails when source
+            // and destination differ only in case. Use a temp name first.
+            if (isCaseOnlyRename)
+            {
+                var tempPath = oldFilePath + "_tmp_rename_";
+                File.Move(oldFilePath, tempPath);
+                File.Move(tempPath, newFilePath);
+            }
+            else
+            {
+                File.Move(oldFilePath, newFilePath);
+            }
         }
         catch (Exception ex)
         {
