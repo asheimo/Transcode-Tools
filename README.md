@@ -1,11 +1,11 @@
 # Transcode Tools
 
-GUI to remux and transcode videos based on the teachings and tools of [Don Melton](http://donmelton.com/)
+GUI to remux and transcode videos based on the teachings and tools of [Lisa Melton](http://Lisamelton.com/)
 
 ## About
 
 I hate having to do things in multiple tools and/or from the command line. That's just how I grew up, GUI all the way. So after spending
-some time transcoding my own videos using both Don's [transcode-video](https://github.com/donmelton/video_transcoding) and [other-transcode](https://github.com/donmelton/other_video_transcoding), and other tools such as [FFmpeg](http://ffmpeg.org/),
+some time transcoding my own videos using both Lisa's [transcode-video](https://github.com/Lisamelton/video_transcoding) and [other-transcode](https://github.com/Lisamelton/other_video_transcoding), and other tools such as [FFmpeg](http://ffmpeg.org/),
 MKVToolnix, etc. I decided I wanted to roll my workflow into a one-stop shop. 
 
 I'm not re-inventing the wheel, just taking tools that perform functions very well and putting a graphical face on them, so that to me,
@@ -20,7 +20,7 @@ The applications depends on the following:
   
   [ffprobe](http://ffmpeg.org/)
   
-  [other-transcode](https://github.com/donmelton/other_video_transcoding)
+  [other-transcode](https://github.com/Lisamelton/other_video_transcoding)
   
   ### For ancillary functions
   mpv
@@ -66,6 +66,6 @@ Since this tool is a wrapper for other-transcode you should understand the defau
 
 For Audio tracks that are in a lossless format you can pass them through but that really defeats the purpose set out with other-transcode. Based on the recommendations of the Hive-Mind of other-transcode lossless tracks should be the tracks you keep when remuxing and then converted to eac3(DD+) when transcoding this should give you the best results and the closest to the original. 
 
-Dealing with subtitle tracks is really simple, the application adds them all the only option you need to be concerned with is if you want to burn the subtitles into the image or not. My preference is to burn forced subtitles into the video, but there are other that don't tink that is needed. It is really up to how you want to titles to behave.
+Dealing with subtitle tracks is really simple, the application adds them all the only option you need to be concerned with is if you want to burn the subtitles into the image or not. My preference is to burn forced subtitles into the video, but there are other that Lisa't tink that is needed. It is really up to how you want to titles to behave.
 
 When you have gotten the title set the way you want it click the Save Transcode Settings button. As with Remux this will create a folder in the input directory named Transcode with movie folders inside of it and txt files of the settings you created. Also you do not have to create settings for all files. The program processes files with no settings using the basic defaults of other-transcode, with the exception that all audio and subtitle tracks are included.
