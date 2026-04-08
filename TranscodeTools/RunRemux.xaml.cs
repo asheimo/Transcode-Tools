@@ -13,6 +13,7 @@
 //   - Cancel the running process when Cancel is clicked
 // ============================================================
 
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
@@ -33,6 +34,10 @@ public partial class RunRemux : Window
     private Process?         _currentProcess;
     private bool             _cancelRequested;
     private bool             _isRunning;
+
+    // Suppresses SelectAll sync while PopulateFolderTree rebuilds the tree,
+    // preventing spurious check/uncheck events from resetting SelectAllCheckBox.
+    private bool             _suppressSelectAllSync;
 
     // ── Constructor ──────────────────────────────────────────────────
     // Receives the current state from MainWindow so the Run window
@@ -207,10 +212,16 @@ public partial class RunRemux : Window
     // ── Folder checkbox cascade ───────────────────────────────────────
     // Checking a folder checks all its file children automatically.
     private void FolderCheckBox_Checked(object sender, RoutedEventArgs e)
-        => SetChildCheckBoxes(sender, true);
+    {
+        SetChildCheckBoxes(sender, true);
+        SyncSelectAllCheckBox();
+    }
 
     private void FolderCheckBox_Unchecked(object sender, RoutedEventArgs e)
-        => SetChildCheckBoxes(sender, false);
+    {
+        SetChildCheckBoxes(sender, false);
+        SyncSelectAllCheckBox();
+    }
 
     private void SetChildCheckBoxes(object sender, bool isChecked)
     {
@@ -228,6 +239,102 @@ public partial class RunRemux : Window
     // ── Show files toggle ─────────────────────────────────────────────
     private void ShowFilesCheckBox_Changed(object sender, RoutedEventArgs e)
         => PopulateFolderTree();
+
+    // ── Select All checkbox ───────────────────────────────────────────
+    // Checks or unchecks every selectable folder/season checkbox in the tree.
+    // File children cascade automatically via FolderCheckBox_Checked/Unchecked.
+    // _suppressSelectAllSync prevents the individual checkbox change events
+    // from immediately re-evaluating and fighting back against this bulk set.
+    private void SelectAll_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_suppressSelectAllSync) return;
+        var isChecked = SelectAllCheckBox.IsChecked == true;
+
+        _suppressSelectAllSync = true;
+        try
+        {
+            SetAllFolderCheckBoxes(FolderTree.Items, isChecked);
+        }
+        finally
+        {
+            _suppressSelectAllSync = false;
+        }
+    }
+
+    // Prevents the user from landing on the indeterminate state via clicking.
+    // IsThreeState="True" is needed so SyncSelectAllCheckBox can set null
+    // programmatically to show a mixed state, but when the user clicks through
+    // checked → indeterminate we immediately push it to unchecked instead.
+    private void SelectAllIndeterminate_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_suppressSelectAllSync) return;
+        _suppressSelectAllSync = true;
+        try
+        {
+            SelectAllCheckBox.IsChecked = false;
+            SetAllFolderCheckBoxes(FolderTree.Items, false);
+        }
+        finally
+        {
+            _suppressSelectAllSync = false;
+        }
+    }
+
+    // Walks the TreeView item collection recursively and sets every CheckBox
+    // header to the given state. TV show headers are plain TextBlocks (not
+    // checkboxes) so they are skipped — only selectable season/movie nodes fire.
+    private void SetAllFolderCheckBoxes(ItemCollection items, bool isChecked)
+    {
+        foreach (TreeViewItem item in items)
+        {
+            if (item.Header is CheckBox cb)
+                cb.IsChecked = isChecked;
+
+            if (item.Items.Count > 0)
+                SetAllFolderCheckBoxes(item.Items, isChecked);
+        }
+    }
+
+    // Syncs the Select All checkbox state after any individual folder checkbox
+    // changes — all checked → checked; any unchecked → unchecked.
+    // Called from FolderCheckBox_Checked and FolderCheckBox_Unchecked.
+    private void SyncSelectAllCheckBox()
+    {
+        if (_suppressSelectAllSync) return;
+
+        var allCheckBoxes = CollectAllFolderCheckBoxes(FolderTree.Items);
+        if (allCheckBoxes.Count == 0) return;
+
+        var allChecked  = allCheckBoxes.All(cb => cb.IsChecked == true);
+        var noneChecked = allCheckBoxes.All(cb => cb.IsChecked != true);
+
+        _suppressSelectAllSync = true;
+        try
+        {
+            // Three-state: all checked → checked, none checked → unchecked,
+            // mixed → indeterminate (IsThreeState must be true on the CheckBox).
+            SelectAllCheckBox.IsChecked = allChecked ? true
+                                        : noneChecked ? false
+                                        : null;
+        }
+        finally
+        {
+            _suppressSelectAllSync = false;
+        }
+    }
+
+    private List<CheckBox> CollectAllFolderCheckBoxes(ItemCollection items)
+    {
+        var result = new List<CheckBox>();
+        foreach (TreeViewItem item in items)
+        {
+            if (item.Header is CheckBox cb)
+                result.Add(cb);
+            if (item.Items.Count > 0)
+                result.AddRange(CollectAllFolderCheckBoxes(item.Items));
+        }
+        return result;
+    }
 
     // ── Start button ──────────────────────────────────────────────────
     private async void StartBtn_Click(object sender, RoutedEventArgs e)

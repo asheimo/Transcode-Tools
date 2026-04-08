@@ -1102,11 +1102,12 @@ public partial class MainWindow : Window
                 video.Preset = tokens[presetIndex + 1];
         }
 
-        // ── Audio: Format and BitRate ─────────────────────────────────
-        // Scan for -c:a:N <codec> and -b:a:N <value> tokens.
+        // ── Audio: Format, BitRate, and Width ─────────────────────────
+        // Scan for -c:a:N <codec>, -b:a:N <value>, and -ac:a:N <count> tokens.
         // N is the 0-based audio index matching the collection order.
         var audioFormats  = new Dictionary<int, string>();
         var audioBitrates = new Dictionary<int, string>();
+        var audioWidths   = new Dictionary<int, string>();
 
         for (int i = 0; i < tokens.Length - 1; i++)
         {
@@ -1126,6 +1127,19 @@ public partial class MainWindow : Window
             {
                 audioBitrates[baIdx] = tokens[i + 1].TrimEnd('k', 'K');
             }
+
+            // -ac:a:N <count>  — channel count set by Width selection
+            // 2 → Stereo, 6 → 5.1. Any other value is left as "Keep".
+            if (tokens[i].StartsWith("-ac:a:") &&
+                int.TryParse(tokens[i].Substring(6), out var acIdx))
+            {
+                audioWidths[acIdx] = tokens[i + 1] switch
+                {
+                    "2" => "Stereo",
+                    "6" => "5.1",
+                    _   => "Keep"
+                };
+            }
         }
 
         for (int i = 0; i < TranscodeAudioTracks.Count; i++)
@@ -1135,6 +1149,11 @@ public partial class MainWindow : Window
 
             if (audioBitrates.TryGetValue(i, out var br))
                 TranscodeAudioTracks[i].BitRate = br;
+
+            // Restore Width after Format so AvailableWidths is already
+            // populated with the correct options when Width is set.
+            if (audioWidths.TryGetValue(i, out var w))
+                TranscodeAudioTracks[i].Width = w;
         }
 
         // ── Settings mismatch detection ───────────────────────────────
@@ -1630,6 +1649,180 @@ public partial class MainWindow : Window
         // Update the selected file bar if this file is currently selected
         if (FileTree.SelectedItem == leaf)
             ShowSelectedFileBar(Path.GetFileNameWithoutExtension(newFileName));
+    }
+
+    // ── Right-click rename — folder node (left panel) ────────────────
+    // Renames the folder on disk and updates the tree node display name.
+    // Also renames the matching Remux and Transcode settings subfolders
+    // if they exist, so saved settings survive the rename.
+    private void RenameFolderNode_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem menuItem) return;
+
+        FolderNode? folderNode = null;
+        if (menuItem.DataContext is FolderNode fn)
+            folderNode = fn;
+        else if (menuItem.Parent is ContextMenu cm &&
+                 cm.PlacementTarget is FrameworkElement fe &&
+                 fe.DataContext is FolderNode placementFn)
+            folderNode = placementFn;
+
+        if (folderNode == null) return;
+        if (string.IsNullOrWhiteSpace(_inputDirectory)) return;
+
+        var oldName = folderNode.FolderPath;   // relative: just the folder name for movies
+        var newNameInput = ShowRenameDialog(oldName);
+        if (newNameInput == null) return;
+
+        var newName = newNameInput.Trim();
+        if (string.IsNullOrWhiteSpace(newName)) return;
+        if (newName.Equals(oldName, StringComparison.Ordinal)) return;
+
+        var oldFolderPath = Path.Combine(_inputDirectory, oldName);
+        var newFolderPath = Path.Combine(_inputDirectory, newName);
+
+        if (!Directory.Exists(oldFolderPath))
+        {
+            MessageBox.Show("The original folder could not be found on disk.",
+                "Rename Failed", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var isCaseOnly = newName.Equals(oldName, StringComparison.OrdinalIgnoreCase);
+        if (!isCaseOnly && Directory.Exists(newFolderPath))
+        {
+            MessageBox.Show($"A folder named \"{newName}\" already exists.",
+                "Rename Failed", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        // ── Rename the media folder ───────────────────────────────────
+        try
+        {
+            if (isCaseOnly)
+            {
+                var tempPath = oldFolderPath + "_tmp_rename_";
+                Directory.Move(oldFolderPath, tempPath);
+                Directory.Move(tempPath, newFolderPath);
+            }
+            else
+            {
+                Directory.Move(oldFolderPath, newFolderPath);
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Could not rename folder:\n{ex.Message}",
+                "Rename Failed", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        // ── Rename matching settings subfolders ───────────────────────
+        foreach (var modeFolder in new[] { "Remux", "Transcode" })
+        {
+            var oldSettingsPath = Path.Combine(_inputDirectory, modeFolder, oldName);
+            var newSettingsPath = Path.Combine(_inputDirectory, modeFolder, newName);
+
+            if (!Directory.Exists(oldSettingsPath)) continue;
+
+            try
+            {
+                if (isCaseOnly)
+                {
+                    var tempPath = oldSettingsPath + "_tmp_rename_";
+                    Directory.Move(oldSettingsPath, tempPath);
+                    Directory.Move(tempPath, newSettingsPath);
+                }
+                else
+                {
+                    Directory.Move(oldSettingsPath, newSettingsPath);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"Folder renamed but could not rename {modeFolder} settings folder:\n{ex.Message}",
+                    "Settings Rename Warning",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
+        // ── Update the tree node ──────────────────────────────────────
+        folderNode.FolderPath   = newName;
+        folderNode.DisplayName  = newName;
+
+        // If this folder is currently selected, update _selectedMovieFolder
+        // so subsequent Save/Load operations use the new path.
+        if (_selectedMovieFolder == oldName)
+            _selectedMovieFolder = newName;
+    }
+
+    // ── Right-click Delete Settings File (file leaf context menu) ────
+    // Deletes the .txt settings file for the current mode (Remux or Transcode).
+    // Prompts for confirmation first. Updates the leaf background after delete.
+    private void DeleteSettingsFile_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem menuItem) return;
+
+        FileLeafNode? leaf = null;
+        if (menuItem.DataContext is FileLeafNode fn)
+            leaf = fn;
+        else if (menuItem.Parent is ContextMenu cm &&
+                 cm.PlacementTarget is FrameworkElement fe &&
+                 fe.DataContext is FileLeafNode placementFn)
+            leaf = placementFn;
+
+        if (leaf == null) return;
+        if (string.IsNullOrWhiteSpace(_inputDirectory) ||
+            string.IsNullOrWhiteSpace(_selectedMovieFolder)) return;
+
+        var modeFolder   = _isTranscodeMode ? "Transcode" : "Remux";
+        var nameNoExt    = Path.GetFileNameWithoutExtension(leaf.FileName);
+        var settingsPath = Path.Combine(_inputDirectory, modeFolder,
+                               _selectedMovieFolder, nameNoExt + ".txt");
+
+        if (!File.Exists(settingsPath))
+        {
+            MessageBox.Show("No settings file exists for this file.",
+                "Delete Settings", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var result = MessageBox.Show(
+            $"Delete settings file for:\n{nameNoExt}?",
+            "Confirm Delete", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+
+        if (result != MessageBoxResult.Yes) return;
+
+        try
+        {
+            File.Delete(settingsPath);
+            // Clear the green highlight — no settings file any more.
+            leaf.Background = System.Windows.Media.Brushes.Transparent;
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Could not delete settings file:\n{ex.Message}",
+                "Delete Failed", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    // ── Right-click Open Settings Folder (file leaf context menu) ────
+    // Opens the Remux or Transcode settings subfolder for the selected folder
+    // in Windows Explorer. Creates the folder if it doesn't exist yet so
+    // Explorer always has somewhere to navigate to.
+    private void OpenSettingsFolder_Click(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(_inputDirectory) ||
+            string.IsNullOrWhiteSpace(_selectedMovieFolder)) return;
+
+        var modeFolder   = _isTranscodeMode ? "Transcode" : "Remux";
+        var settingsPath = Path.Combine(_inputDirectory, modeFolder, _selectedMovieFolder);
+
+        if (!Directory.Exists(settingsPath))
+            Directory.CreateDirectory(settingsPath);
+
+        System.Diagnostics.Process.Start("explorer.exe", settingsPath);
     }
 
     // Shows a simple rename dialog pre-populated with the current filename

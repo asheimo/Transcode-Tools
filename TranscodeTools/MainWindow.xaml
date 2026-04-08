@@ -307,7 +307,14 @@
                                                ToolTip="Missing Year Label"
                                                Visibility="{Binding HasYearWarning,
                                                    Converter={StaticResource BoolToVisibility}}"/>
-                                    <TextBlock Text="{Binding DisplayName}" Padding="2,1"/>
+                                    <TextBlock Text="{Binding DisplayName}" Padding="2,1">
+                                        <TextBlock.ContextMenu>
+                                            <ContextMenu>
+                                                <MenuItem Header="Rename"
+                                                          Click="RenameFolderNode_Click"/>
+                                            </ContextMenu>
+                                        </TextBlock.ContextMenu>
+                                    </TextBlock>
                                 </StackPanel>
                             </DataTemplate>
                             <!-- TV show: expandable node with season children -->
@@ -362,6 +369,10 @@
                                             <ContextMenu>
                                                 <MenuItem Header="Rename"
                                                           Click="RenameLeaf_Click"/>
+                                                <MenuItem Header="Delete Settings File"
+                                                          Click="DeleteSettingsFile_Click"/>
+                                                <MenuItem Header="Open Settings Folder"
+                                                          Click="OpenSettingsFolder_Click"/>
                                             </ContextMenu>
                                         </TextBlock.ContextMenu>
                                     </TextBlock>

@@ -24,13 +24,24 @@
                 BorderBrush="{DynamicResource BorderColor}"
                 Padding="12,10">
             <Grid>
-                <!-- Show files toggle — left aligned -->
-                <CheckBox x:Name="ShowFilesCheckBox"
-                          Content="Show individual files"
-                          VerticalAlignment="Center"
-                          HorizontalAlignment="Left"
-                          Checked="ShowFilesCheckBox_Changed"
-                          Unchecked="ShowFilesCheckBox_Changed"/>
+                <!-- Left side: Select All and Show individual files toggles -->
+                <StackPanel Orientation="Horizontal"
+                            HorizontalAlignment="Left"
+                            VerticalAlignment="Center">
+                    <CheckBox x:Name="SelectAllCheckBox"
+                              Content="Select All"
+                              IsThreeState="True"
+                              VerticalAlignment="Center"
+                              Checked="SelectAll_Changed"
+                              Unchecked="SelectAll_Changed"
+                              Indeterminate="SelectAllIndeterminate_Changed"/>
+                    <CheckBox x:Name="ShowFilesCheckBox"
+                              Content="Show individual files"
+                              VerticalAlignment="Center"
+                              Margin="16,0,0,0"
+                              Checked="ShowFilesCheckBox_Changed"
+                              Unchecked="ShowFilesCheckBox_Changed"/>
+                </StackPanel>
 
                 <!-- Start and Close/Cancel buttons — right aligned -->
                 <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
