@@ -93,16 +93,18 @@
         </x:Array>
         <x:Array x:Key="AudioWidthOptions" Type="sys:String">
             <sys:String>Keep</sys:String>
-            <sys:String>Surround</sys:String>
+            <sys:String>5.1</sys:String>
             <sys:String>Stereo</sys:String>
-            <sys:String>Mono</sys:String>
         </x:Array>
         <x:Array x:Key="AudioBitRateOptions" Type="sys:String">
             <sys:String>Keep</sys:String>
             <sys:String>1536</sys:String>
-            <sys:String>768</sys:String>
+            <sys:String>1024</sys:String>
             <sys:String>640</sys:String>
+            <sys:String>448</sys:String>
+            <sys:String>384</sys:String>
             <sys:String>320</sys:String>
+            <sys:String>256</sys:String>
             <sys:String>192</sys:String>
         </x:Array>
     </Window.Resources>
@@ -635,23 +637,27 @@
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
-                                <!-- Width: disabled pending Phase 2 implementation -->
+                                <!-- Width: dynamic options driven by AvailableWidths on the track model.
+                                     Keep format → only "Keep"; encode format → Keep/5.1/Stereo based
+                                     on source channel count. Enabled only when Format is not Keep. -->
                                 <GridViewColumn Header="Width" Width="110">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
                                             <ComboBox SelectedItem="{Binding Width, Mode=TwoWay}"
-                                                      ItemsSource="{StaticResource AudioWidthOptions}"
-                                                      Width="100" IsEnabled="False"/>
+                                                      ItemsSource="{Binding AvailableWidths}"
+                                                      IsEnabled="{Binding IsLossless, Converter={StaticResource InverseBoolConverter}}"
+                                                      Width="100"/>
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
-                                <!-- Bit Rate: locked on lossless parent rows (no encoding, bitrate irrelevant).
-                                     Sub-rows and lossy parent rows are freely editable. -->
+                                <!-- Bit Rate: dynamic options driven by AvailableBitRates on the track model.
+                                     Keep format → only "Keep"; Stereo width → capped at 640;
+                                     lossy source → further capped at source bitrate. -->
                                 <GridViewColumn Header="Bit Rate (Kbps)" Width="130">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
                                             <ComboBox SelectedItem="{Binding BitRate, Mode=TwoWay}"
-                                                      ItemsSource="{StaticResource AudioBitRateOptions}"
+                                                      ItemsSource="{Binding AvailableBitRates}"
                                                       IsEnabled="{Binding IsLossless, Converter={StaticResource InverseBoolConverter}}"
                                                       Width="120"/>
                                         </DataTemplate>

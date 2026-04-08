@@ -13,6 +13,7 @@
 // here the binding does it for you.
 // ============================================================
 
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
@@ -307,6 +308,19 @@ public class TranscodeAudioTrack : ObservableBase
     // correct source stream index when building the derived encode command.
     public int ParentTrackIndex { get; set; } = -1;
 
+    // SourceChannels is the raw channel count from ffprobe (e.g. 2, 6, 8).
+    // Set at probe time, never changes. Drives AvailableWidths — we never
+    // offer a Width option that would require upmixing.
+    // For lossless sources this is always populated. For lossy sources ffprobe
+    // always reports channels so it should always be > 0.
+    public int SourceChannels { get; set; } = 0;
+
+    // SourceBitRateKbps is the source track bitrate in Kbps, read from ffprobe.
+    // Set at probe time, never changes. 0 for lossless tracks (no meaningful
+    // bitrate to cap against). Drives AvailableBitRates ceiling for lossy sources
+    // — we prevent encoding a lossy source at higher than its own bitrate.
+    public int SourceBitRateKbps { get; set; } = 0;
+
     // IsSelected controls whether this track (or sub-row) is included in the
     // output. Defaults to true — all tracks included unless user unchecks.
     // When a parent is deselected, all its sub-rows are also deselected.
@@ -328,14 +342,39 @@ public class TranscodeAudioTrack : ObservableBase
     public string Format
     {
         get => _format;
-        set { _format = value; OnPropertyChanged(); }
+        set
+        {
+            _format = value;
+            OnPropertyChanged();
+            // Width options depend on whether we are encoding at all.
+            // Keep → only "Keep" is valid for Width (no encoding, no downmix).
+            // Any encode format → full width menu based on source channels.
+            OnPropertyChanged(nameof(AvailableWidths));
+            // Bitrate options also change: Keep format → only "Keep" bitrate.
+            OnPropertyChanged(nameof(AvailableBitRates));
+            // Reset Width and BitRate if they are no longer valid choices.
+            // This prevents a stale "5.1" width sitting on a Keep-format row.
+            if (!AvailableWidths.Contains(_width))   Width   = "Keep";
+            if (!AvailableBitRates.Contains(_bitRate)) BitRate = "Keep";
+        }
     }
 
     private string _width = "";
     public string Width
     {
         get => _width;
-        set { _width = value; OnPropertyChanged(); }
+        set
+        {
+            _width = value;
+            OnPropertyChanged();
+            // Bitrate ceiling changes with Width: Stereo tops out at 640,
+            // 5.1 can go up to 1536. Notify so the BitRate ComboBox rerenders.
+            OnPropertyChanged(nameof(AvailableBitRates));
+            // Reset BitRate if it is no longer in the new list.
+            // e.g. user had 1536 selected for 5.1, then switched to Stereo —
+            // 1536 is not valid for Stereo so snap back to "Keep".
+            if (!AvailableBitRates.Contains(_bitRate)) BitRate = "Keep";
+        }
     }
 
     private string _bitRate = "";
@@ -343,6 +382,83 @@ public class TranscodeAudioTrack : ObservableBase
     {
         get => _bitRate;
         set { _bitRate = value; OnPropertyChanged(); }
+    }
+
+    // ── Computed option lists ─────────────────────────────────────────
+    //
+    // These are read-only properties that return the valid options for the
+    // Width and BitRate ComboBoxes based on the current track state.
+    // WPF re-queries them whenever OnPropertyChanged is called with their name.
+    //
+    // In VB.NET WinForms you would repopulate a ComboBox manually in an event
+    // handler. Here the binding does it — the ComboBox ItemsSource is bound to
+    // AvailableWidths/AvailableBitRates, and when PropertyChanged fires for those
+    // names WPF calls the getter again and updates the dropdown automatically.
+
+    // AvailableWidths returns the downmix options valid for this track.
+    // Rules:
+    //   Format = Keep  → only "Keep" (no encoding, downmix flags are irrelevant)
+    //   Source ≤ 2ch   → ["Keep", "Stereo"]  (can't offer 5.1, no upmixing)
+    //   Source ≥ 6ch   → ["Keep", "5.1", "Stereo"]
+    public IReadOnlyList<string> AvailableWidths
+    {
+        get
+        {
+            var isKeepFormat = string.IsNullOrEmpty(_format) ||
+                               _format.Equals("Keep", StringComparison.OrdinalIgnoreCase);
+
+            if (isKeepFormat)
+                return ["Keep"];
+
+            if (SourceChannels >= 6)
+                return ["Keep", "5.1", "Stereo"];
+
+            // Stereo or mono source — only downmix option is Stereo (or Keep).
+            return ["Keep", "Stereo"];
+        }
+    }
+
+    // All supported encode bitrates in descending order.
+    // 768 is not a standard EAC3/AC3 bitrate and is excluded.
+    private static readonly int[] _allBitRates = [1536, 1024, 640, 448, 384, 320, 256, 192];
+
+    // AvailableBitRates returns the valid bitrate choices for this track.
+    // Rules:
+    //   Format = Keep        → ["Keep"] only (copy, no bitrate applies)
+    //   Width = Stereo       → cap at 640 Kbps (stereo ceiling for eac3/ac3)
+    //   Width = 5.1 or Keep  → cap at 1536 Kbps
+    //   Lossy source         → further cap at SourceBitRateKbps (no upscaling)
+    //   Lossless source      → no source-bitrate cap (SourceBitRateKbps = 0)
+    public IReadOnlyList<string> AvailableBitRates
+    {
+        get
+        {
+            var isKeepFormat = string.IsNullOrEmpty(_format) ||
+                               _format.Equals("Keep", StringComparison.OrdinalIgnoreCase);
+
+            if (isKeepFormat)
+                return ["Keep"];
+
+            // Width ceiling: Stereo tops out at 640, everything else at 1536.
+            var widthCeiling = _width.Equals("Stereo", StringComparison.OrdinalIgnoreCase)
+                ? 640 : 1536;
+
+            // Source ceiling: for lossy sources we refuse to encode higher than
+            // the source bitrate (lossy-to-lossy quality compounding). Lossless
+            // sources have SourceBitRateKbps = 0, which we treat as uncapped.
+            var sourceCeiling = (!IsLossless && SourceBitRateKbps > 0)
+                ? SourceBitRateKbps : int.MaxValue;
+
+            var effectiveCeiling = Math.Min(widthCeiling, sourceCeiling);
+
+            var list = new List<string> { "Keep" };
+            foreach (var br in _allBitRates)
+            {
+                if (br <= effectiveCeiling)
+                    list.Add(br.ToString());
+            }
+            return list;
+        }
     }
 }
 

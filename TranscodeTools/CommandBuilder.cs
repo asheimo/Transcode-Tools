@@ -431,6 +431,32 @@ public static class CommandBuilder
                 {
                     sb.Append($" -b:a:{outIdx} {br}k");
                 }
+
+                // ── Width / channel downmix ───────────────────────────
+                // Width = "5.1"    → -ac:a:N 6   (ffmpeg outputs 6 channels)
+                // Width = "Stereo" → -ac:a:N 2   (ffmpeg outputs 2 channels)
+                //                    -af:a:N aresample=matrix_encoding=dplii
+                //                    (Pro Logic II encode preserves surround
+                //                     information in the stereo downmix —
+                //                     much better than a plain fold-down)
+                // Width = "Keep"   → no -ac or -af flags (source layout kept)
+                //
+                // Note: ffmpeg handles the actual downmix automatically when
+                // -ac sets a lower channel count than the source. The aresample
+                // filter is layered on top only for the Stereo case to improve
+                // downmix quality. 7.1 → 5.1 via -ac 6 is also automatic and
+                // clean — ffmpeg folds the side channels into surrounds with
+                // proper level compensation.
+                var width = t.Width;
+                if (width.Equals("5.1", StringComparison.OrdinalIgnoreCase))
+                {
+                    sb.Append($" -ac:a:{outIdx} 6");
+                }
+                else if (width.Equals("Stereo", StringComparison.OrdinalIgnoreCase))
+                {
+                    sb.Append($" -ac:a:{outIdx} 2");
+                    sb.Append($" -af:a:{outIdx} aresample=matrix_encoding=dplii");
+                }
             }
 
             outIdx++;

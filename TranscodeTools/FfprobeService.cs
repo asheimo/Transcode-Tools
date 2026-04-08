@@ -321,6 +321,19 @@ public static class FfprobeService
         var bitrate  = BuildBitRate(s);
         var lang     = tags?["language"]?.GetValue<string>() ?? "";
 
+        // ── Source channel count ──────────────────────────────────────
+        // Read the raw integer channel count (e.g. 2, 6, 8) for use by
+        // AvailableWidths — determines whether 5.1 and/or Stereo downmix
+        // options are offered. "channels" in the JSON is always an integer.
+        var sourceChannels = s["channels"]?.GetValue<int>() ?? 0;
+
+        // ── Source bitrate ────────────────────────────────────────────
+        // Used by AvailableBitRates to enforce the lossy source ceiling.
+        // BuildBitRate already parsed this to a Kbps string; re-parse as
+        // int here so the model can do numeric comparisons. 0 = unknown/
+        // lossless (treated as uncapped in AvailableBitRates).
+        int.TryParse(bitrate, out var sourceBitRateKbps);
+
         // ── Lossless detection ────────────────────────────────────────
         // Determines whether the + expander is shown in the UI and whether
         // the Format/BitRate dropdowns are locked on the parent row.
@@ -335,9 +348,13 @@ public static class FfprobeService
 
         return new TranscodeAudioTrack
         {
-            OriginalTrackIndex = index,
-            IsLossless = isLossless,
-            TrackInfo  = $"Audio: {format} {channels} {bitrate}Kbps [{lang}]".Trim(),
+            OriginalTrackIndex  = index,
+            IsLossless          = isLossless,
+            SourceChannels      = sourceChannels,
+            // Lossless tracks report no meaningful bitrate — leave 0 so
+            // AvailableBitRates treats them as uncapped.
+            SourceBitRateKbps   = isLossless ? 0 : sourceBitRateKbps,
+            TrackInfo           = $"Audio: {format} {channels} {bitrate}Kbps [{lang}]".Trim(),
             // All three dropdowns default to "Keep" — meaning copy without re-encoding.
             // The user changes these only if they want to transcode a specific track.
             Format    = "Keep",

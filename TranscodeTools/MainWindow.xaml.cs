@@ -2071,6 +2071,12 @@ public partial class MainWindow : Window
             IsSubRow           = true,
             IsLossless         = false,
             ParentTrackIndex   = parent.OriginalTrackIndex,
+            // Sub-rows inherit source channel count and bitrate from the lossless
+            // parent so AvailableWidths and AvailableBitRates work correctly.
+            // Lossless parents have SourceBitRateKbps = 0, which means uncapped —
+            // correct, since we are encoding from a lossless source.
+            SourceChannels     = parent.SourceChannels,
+            SourceBitRateKbps  = 0,   // lossless source — no bitrate ceiling
             IsSelected         = true,
             TrackInfo          = $"  ↳ derived from {parent.TrackInfo}",
             Format             = "eac3",
