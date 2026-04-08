@@ -1136,6 +1136,118 @@ public partial class MainWindow : Window
             if (audioBitrates.TryGetValue(i, out var br))
                 TranscodeAudioTracks[i].BitRate = br;
         }
+
+        // ── Settings mismatch detection ───────────────────────────────
+        // Compare the saved command against current app preferences.
+        // DoVi streams are exempt — preset and quality flags don't apply
+        // to the copy-only path.
+        if (video != null && !video.HasDoVi)
+        {
+            // Preset mismatch: saved preset vs current default
+            var defaultPreset = AppSettings.Instance.DefaultPreset ?? "";
+            video.PresetMismatch = !string.IsNullOrWhiteSpace(defaultPreset) &&
+                !video.Preset.Equals(defaultPreset, StringComparison.OrdinalIgnoreCase);
+
+            // Quality flags mismatch: parse app flags into "-flag value" pairs
+            // and check each pair exists as a substring in the saved command.
+            // e.g. ["-cq 19", "-spatial-aq 1", "-aq-strength 10"]
+            var appFlags = AppSettings.Instance.NvencQualityFlags ?? "";
+            video.QualityFlagsMismatch = false;
+
+            if (!string.IsNullOrWhiteSpace(appFlags))
+            {
+                var flagPairs = ParseFlagPairs(appFlags);
+                var commandLower = command.ToLowerInvariant();
+                foreach (var pair in flagPairs)
+                {
+                    if (!commandLower.Contains(pair.ToLowerInvariant()))
+                    {
+                        video.QualityFlagsMismatch = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        RefreshVideoWarningColumn();
+    }
+
+    // Parses a quality flags string into "-flag value" pairs.
+    // e.g. "-cq 19 -spatial-aq 1 -aq-strength 10"
+    //   → ["-cq 19", "-spatial-aq 1", "-aq-strength 10"]
+    // Splits on flag boundaries (tokens starting with '-'), grouping
+    // each flag with its immediately following value token.
+    // Standalone flags with no value (e.g. boolean switches) are kept as-is.
+    private static List<string> ParseFlagPairs(string flagString)
+    {
+        var pairs  = new List<string>();
+        var tokens = flagString.Trim().Split(' ',
+            StringSplitOptions.RemoveEmptyEntries);
+
+        for (int i = 0; i < tokens.Length; i++)
+        {
+            if (!tokens[i].StartsWith("-")) continue;
+
+            // If the next token exists and is not itself a flag, it's the value
+            if (i + 1 < tokens.Length && !tokens[i + 1].StartsWith("-"))
+            {
+                pairs.Add($"{tokens[i]} {tokens[i + 1]}");
+                i++; // skip the value token
+            }
+            else
+            {
+                pairs.Add(tokens[i]);
+            }
+        }
+
+        return pairs;
+    }
+
+    // Adds or removes the Warning column in TranscodeVideoList based on whether
+    // any video track has QualityFlagsMismatch = true.
+    // The column is added dynamically so it only appears when relevant.
+    private void RefreshVideoWarningColumn()
+    {
+        if (TranscodeVideoList.View is not GridView gv) return;
+
+        const string warningHeader = "Warning";
+        var existing = gv.Columns.FirstOrDefault(c =>
+            c.Header?.ToString() == warningHeader);
+
+        var hasMismatch = TranscodeVideoTracks.Any(t => t.QualityFlagsMismatch);
+
+        if (hasMismatch && existing == null)
+        {
+            // Add the Warning column dynamically
+            var col = new GridViewColumn
+            {
+                Header = warningHeader,
+                Width  = 260
+            };
+
+            var template = new DataTemplate();
+            var factory  = new FrameworkElementFactory(typeof(TextBlock));
+            factory.SetValue(TextBlock.TextProperty,
+                "NVENC Quality Flags differ from App Settings");
+            factory.SetValue(TextBlock.ForegroundProperty,
+                new System.Windows.Media.SolidColorBrush(
+                    System.Windows.Media.Color.FromRgb(0xFF, 0xC1, 0x07)));
+            factory.SetValue(TextBlock.FontSizeProperty, 11.0);
+            factory.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
+            factory.SetValue(TextBlock.VisibilityProperty,
+                new System.Windows.Data.Binding("QualityFlagsMismatch")
+                {
+                    Converter = new BooleanToVisibilityConverter()
+                });
+
+            template.VisualTree = factory;
+            col.CellTemplate    = template;
+            gv.Columns.Add(col);
+        }
+        else if (!hasMismatch && existing != null)
+        {
+            gv.Columns.Remove(existing);
+        }
     }
 
     // Parses a track index list from a command string.
@@ -1179,6 +1291,9 @@ public partial class MainWindow : Window
         TranscodeVideoTracks.Clear();
         TranscodeAudioTracks.Clear();
         TranscodeSubtitleTracks.Clear();
+
+        // Remove the Warning column if it was showing for the previous file.
+        RefreshVideoWarningColumn();
 
         // Disable drag until tracks are loaded and 2+ are selected.
         if (RemuxAudioList != null)
@@ -1730,56 +1845,68 @@ public partial class MainWindow : Window
     {
         if (FileTree.SelectedItem is not FileLeafNode leaf) return;
 
+        // ── Always build from current UI state ────────────────────────
+        // View Command always shows what would be generated right now.
+        // Blocking conditions (no output directory, no audio selected)
+        // fire normally — same UX as Save Transcode Settings.
+        if (string.IsNullOrWhiteSpace(OutputDirectoryBox.Text))
+        {
+            MessageBox.Show("No output directory chosen.",
+                "View Command", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        string command;
+        try
+        {
+            command = _isTranscodeMode
+                ? CommandBuilder.BuildTranscodeCommand(
+                    OutputDirectoryBox.Text, _selectedMovieFolder, leaf.FileName,
+                    _inputDirectory, TranscodeVideoTracks, TranscodeAudioTracks,
+                    TranscodeSubtitleTracks)
+                : CommandBuilder.BuildRemuxCommand(
+                    OutputDirectoryBox.Text, _selectedMovieFolder, leaf.FileName,
+                    _inputDirectory, RemuxAudioTracks, RemuxSubtitleTracks);
+        }
+        catch (InvalidOperationException ex)
+        {
+            MessageBox.Show(ex.Message, "View Command",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        // ── Compare to saved settings file if one exists ──────────────
+        // If the current command differs from what's saved, warn the user
+        // so they know the saved file is out of date.
+        var showStaleWarning = false;
         var modeFolder   = _isTranscodeMode ? "Transcode" : "Remux";
         var nameNoExt    = Path.GetFileNameWithoutExtension(leaf.FileName);
         var settingsFile = Path.Combine(_inputDirectory, modeFolder,
                                _selectedMovieFolder, nameNoExt + ".txt");
 
-        string command;
-
         if (File.Exists(settingsFile))
         {
-            // Ground truth — read exactly what will be executed.
-            command = File.ReadAllText(settingsFile, System.Text.Encoding.UTF8);
-        }
-        else
-        {
-            // Transcode only: no settings file yet, build from current UI state.
-            if (string.IsNullOrWhiteSpace(OutputDirectoryBox.Text))
-            {
-                MessageBox.Show("No output directory chosen.",
-                    "View Command", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
-
-            try
-            {
-                command = CommandBuilder.BuildTranscodeCommand(
-                    OutputDirectoryBox.Text, _selectedMovieFolder, leaf.FileName,
-                    _inputDirectory, TranscodeVideoTracks, TranscodeAudioTracks,
-                    TranscodeSubtitleTracks);
-            }
-            catch (InvalidOperationException ex)
-            {
-                MessageBox.Show(ex.Message, "View Command",
-                    MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
+            var savedCommand = File.ReadAllText(settingsFile, System.Text.Encoding.UTF8);
+            showStaleWarning = !string.Equals(
+                command.Trim(), savedCommand.Trim(),
+                StringComparison.Ordinal);
         }
 
-        ShowCommandPreview(command, leaf.FileName);
+        ShowCommandPreview(command, leaf.FileName, showStaleWarning);
     }
 
     // Opens a small owned window showing the full command string in a
     // selectable, word-wrapped TextBox with a Copy button.
-    private void ShowCommandPreview(string command, string fileName)
+    // showStaleWarning: true when the displayed command was read from a settings
+    // file that differs from the current UI state — prompts the user to re-save.
+    private void ShowCommandPreview(string command, string fileName, bool showStaleWarning = false)
     {
         // ── Window shell ──────────────────────────────────────────────
         var win = new Window
         {
             Title           = $"Command — {fileName}",
             Width           = 800,
-            Height          = 300,
+            Height          = showStaleWarning ? 340 : 300,
             MinWidth        = 400,
             MinHeight       = 160,
             Owner           = this,
@@ -1792,13 +1919,36 @@ public partial class MainWindow : Window
 
         // ── Layout ────────────────────────────────────────────────────
         var grid = new Grid { Margin = new Thickness(12) };
+
+        var rowIdx = 0;
+
+        // Warning row (only added when needed)
+        if (showStaleWarning)
+        {
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(8) });
+
+            var warning = new TextBlock
+            {
+                Text         = "⚠ The current selections differ from the saved settings file. " +
+                               "This command shows what will be executed. " +
+                               "Use Save Transcode Settings to update it.",
+                TextWrapping = TextWrapping.Wrap,
+                Foreground   = new System.Windows.Media.SolidColorBrush(
+                                   System.Windows.Media.Color.FromRgb(0xFF, 0xC1, 0x07)),
+                FontSize     = 12,
+                Padding      = new Thickness(4, 2, 4, 2)
+            };
+            Grid.SetRow(warning, rowIdx++);
+            grid.Children.Add(warning);
+            rowIdx++; // skip spacer row
+        }
+
         grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(8) });
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
         // ── Command TextBox ───────────────────────────────────────────
-        // IsReadOnly keeps the text unchanged; IsReadOnlyCaretVisible + PART_ContentHost
-        // together ensure the caret appears and text remains selectable/copyable.
         var textBox = new TextBox
         {
             Text              = command,
@@ -1815,7 +1965,8 @@ public partial class MainWindow : Window
             Padding           = new Thickness(8),
             IsReadOnlyCaretVisible = true
         };
-        Grid.SetRow(textBox, 0);
+        Grid.SetRow(textBox, rowIdx++);
+        rowIdx++; // skip spacer row
 
         // ── Copy button ───────────────────────────────────────────────
         var copyBtn = new Button
@@ -1829,7 +1980,7 @@ public partial class MainWindow : Window
             Clipboard.SetText(command);
             copyBtn.Content = "Copied!";
         };
-        Grid.SetRow(copyBtn, 2);
+        Grid.SetRow(copyBtn, rowIdx);
 
         grid.Children.Add(textBox);
         grid.Children.Add(copyBtn);
@@ -1902,6 +2053,55 @@ public partial class MainWindow : Window
         runWindow.ShowDialog();
     }
 
+    // ── Transcode Audio: derived sub-row management ───────────────────
+
+    // Called when the user clicks + on a lossless parent audio row.
+    // Inserts a new derived lossy sub-row immediately after the parent.
+    // The sub-row inherits the parent's stream index as its source and
+    // defaults to eac3 at 640 kbps — both changeable by the user.
+    // Multiple sub-rows can be added to the same parent (e.g. 5.1 + stereo).
+    private void AddDerivedRow_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement fe || fe.Tag is not TranscodeAudioTrack parent)
+            return;
+
+        var subRow = new TranscodeAudioTrack
+        {
+            OriginalTrackIndex = parent.OriginalTrackIndex,
+            IsSubRow           = true,
+            IsLossless         = false,
+            ParentTrackIndex   = parent.OriginalTrackIndex,
+            IsSelected         = true,
+            TrackInfo          = $"  ↳ derived from {parent.TrackInfo}",
+            Format             = "eac3",
+            Width              = "Keep",
+            BitRate            = "640"
+        };
+
+        // Insert immediately after the last existing sub-row for this parent,
+        // or directly after the parent if it has none yet.
+        var parentIdx = TranscodeAudioTracks.IndexOf(parent);
+        var insertAt  = parentIdx + 1;
+        while (insertAt < TranscodeAudioTracks.Count &&
+               TranscodeAudioTracks[insertAt].IsSubRow &&
+               TranscodeAudioTracks[insertAt].ParentTrackIndex == parent.OriginalTrackIndex)
+        {
+            insertAt++;
+        }
+
+        TranscodeAudioTracks.Insert(insertAt, subRow);
+    }
+
+    // Called when the user clicks — on a sub-row.
+    // Removes that sub-row from the collection.
+    private void RemoveDerivedRow_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement fe || fe.Tag is not TranscodeAudioTrack subRow)
+            return;
+
+        TranscodeAudioTracks.Remove(subRow);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────
     private static void TryLaunch(string exe, string arg)
     {
@@ -1915,4 +2115,39 @@ public partial class MainWindow : Window
                 "Launch Error", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
+}
+
+// ── InverseBoolConverter ──────────────────────────────────────────────
+// Converts bool → bool by negating it.
+// Used to disable dropdowns when HasDoVi is true:
+//   IsEnabled="{Binding HasDoVi, Converter={StaticResource InverseBoolConverter}}"
+// When HasDoVi=true → IsEnabled=false (locked).
+// When HasDoVi=false → IsEnabled=true (normal).
+public class InverseBoolConverter : System.Windows.Data.IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter,
+        System.Globalization.CultureInfo culture)
+        => value is bool b && !b;
+
+    public object ConvertBack(object value, Type targetType, object parameter,
+        System.Globalization.CultureInfo culture)
+        => value is bool b && !b;
+}
+
+// ── PresetMismatchBrushConverter ──────────────────────────────────────
+// Converts PresetMismatch bool → Brush for the Preset ComboBox Background.
+// When true → amber (#FFF3CD) fill to indicate the saved preset differs
+// from the current app default. When false → transparent (theme default).
+public class PresetMismatchBrushConverter : System.Windows.Data.IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter,
+        System.Globalization.CultureInfo culture)
+        => value is bool b && b
+            ? new System.Windows.Media.SolidColorBrush(
+                System.Windows.Media.Color.FromRgb(0xFF, 0xC1, 0x07))
+            : System.Windows.Media.Brushes.Transparent;
+
+    public object ConvertBack(object value, Type targetType, object parameter,
+        System.Globalization.CultureInfo culture)
+        => throw new NotImplementedException();
 }

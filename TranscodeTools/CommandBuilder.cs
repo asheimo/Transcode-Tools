@@ -183,15 +183,56 @@ public static class CommandBuilder
         ObservableCollection<TranscodeAudioTrack> audioTracks,
         ObservableCollection<TranscodeSubtitleTrack> subtitleTracks)
     {
+        // ── Validate audio selection ──────────────────────────────────
+        // Block if no audio tracks exist at all (invalid source file)
+        // or if the user has deselected every track.
         if (audioTracks.Count == 0)
             throw new InvalidOperationException(
                 "No audio tracks found. The source file may be invalid.");
+
+        if (!audioTracks.Any(t => t.IsSelected))
+            throw new InvalidOperationException(
+                "No audio tracks are selected. Please select at least one audio track.");
 
         var inputFile  = Path.Combine(inputDirectory, movieFolder, fileName);
         var outputFile = Path.Combine(outputDirectory, movieFolder, fileName);
         var ffmpegPath = AppSettings.Instance.FFmpeg_Path;
         var video      = videoTracks.FirstOrDefault();
         var sb         = new StringBuilder();
+
+        // ── Dolby Vision: copy-only path ──────────────────────────────
+        // DoVi RPU data cannot survive NVENC re-encoding — the encoder
+        // discards it entirely. The only way to preserve Dolby Vision is
+        // to stream-copy the video track. We detect this via the
+        // OutputFormat value set by FfprobeService when DoVi is found.
+        //
+        // The copy path skips hwaccel/cuvid/nvenc entirely and emits
+        // a much simpler command: ffmpeg -i input -c:v copy + audio/subs.
+        var isDoVi = video != null &&
+            video.OutputFormat.Equals("copy (DoVi)", StringComparison.OrdinalIgnoreCase);
+
+        if (isDoVi)
+        {
+            sb.Append($"\"{ffmpegPath}\"");
+            sb.Append(" -y -loglevel error -stats");
+            sb.Append(" -analyzeduration 100M -probesize 100M");
+            sb.Append($" -i \"{inputFile}\"");
+            sb.Append(" -map 0:v:0 -c:v copy");
+
+            // Audio — selection-aware, sub-row-aware loop (same logic as NVENC path).
+            // outIdx tracks the 0-based output audio index for -c:a:N / -b:a:N flags.
+            // Sub-rows map the parent's source stream index but encode independently.
+            AppendAudioArgs(sb, audioTracks);
+
+            // Subtitles — copy all tracks
+            for (int i = 0; i < subtitleTracks.Count; i++)
+                sb.Append($" -map 0:s:{i} -c:s:{i} copy");
+
+            sb.Append($" \"{outputFile}\"");
+            return sb.ToString();
+        }
+
+        // ── Normal NVENC encode path (SDR and HDR10/HLG) ─────────────
 
         // ── Determine encode codec ────────────────────────────────────
         // User's OutputFormat choice drives this.
@@ -258,6 +299,44 @@ public static class CommandBuilder
         if (!string.IsNullOrWhiteSpace(qualityFlags))
             sb.Append($" {qualityFlags.Trim()}");
 
+        // ── HDR10 / HLG color metadata passthrough ────────────────────
+        // When the source has bt2020 primaries (HDR10 or HLG), we must
+        // explicitly tag the output stream with the same color metadata.
+        // Without these flags, ffmpeg leaves the output untagged and
+        // players fall back to SDR tone-mapping on HDR displays.
+        //
+        // We pass through the exact values read from ffprobe rather than
+        // hardcoding, so HLG (arib-std-b67) is handled correctly alongside
+        // HDR10 (smpte2084).
+        //
+        // DoVi is handled above via the copy path — this block is only
+        // reached for SDR and HDR10/HLG sources.
+        if (!string.IsNullOrWhiteSpace(video?.ColorPrimaries) &&
+            video.ColorPrimaries.Equals("bt2020", StringComparison.OrdinalIgnoreCase))
+        {
+            sb.Append($" -color_primaries {video.ColorPrimaries}");
+
+            if (!string.IsNullOrWhiteSpace(video.ColorTransfer))
+                sb.Append($" -color_trc {video.ColorTransfer}");
+
+            if (!string.IsNullOrWhiteSpace(video.ColorSpace))
+                sb.Append($" -colorspace {video.ColorSpace}");
+
+            // Static HDR10 SEI: mastering display color volume (SEI 137).
+            // Encodes the display the master was graded on — primaries, white
+            // point, and peak/floor luminance. Without this, players cannot
+            // perform accurate HDR tone-mapping even if color tags are correct.
+            if (!string.IsNullOrWhiteSpace(video.MasterDisplay))
+                sb.Append($" -master_display \"{video.MasterDisplay}\"");
+
+            // Static HDR10 SEI: content light level (SEI 144).
+            // MaxCLL (max content light level) and MaxFALL (max frame-average
+            // light level) tell displays the brightest highlights in the content.
+            // Stored as "MaxCLL,MaxFALL" — e.g. "1000,400".
+            if (!string.IsNullOrWhiteSpace(video.MaxCll))
+                sb.Append($" -max_cll \"{video.MaxCll}\"");
+        }
+
         if (needs10bit)
         {
             // -highbitdepth true enables 10-bit output in hevc_nvenc.
@@ -268,34 +347,8 @@ public static class CommandBuilder
         }
 
         // ── Audio — per track ─────────────────────────────────────────
-        // ffmpeg -map 0:a:N uses 0-based audio-relative index.
-        // We iterate all tracks; the user's Format dropdown determines
-        // copy vs encode. BitRate is used when encoding.
-        for (int i = 0; i < audioTracks.Count; i++)
-        {
-            var t      = audioTracks[i];
-            var format = t.Format.ToLowerInvariant();
-
-            sb.Append($" -map 0:a:{i}");
-
-            if (format == "keep" || string.IsNullOrWhiteSpace(format))
-            {
-                sb.Append($" -c:a:{i} copy");
-            }
-            else
-            {
-                // User has chosen a target codec (eac3 or ac3)
-                sb.Append($" -c:a:{i} {format}");
-
-                // Append bitrate if the user chose one
-                var br = t.BitRate;
-                if (!string.IsNullOrWhiteSpace(br) &&
-                    !br.Equals("Keep", StringComparison.OrdinalIgnoreCase))
-                {
-                    sb.Append($" -b:a:{i} {br}k");
-                }
-            }
-        }
+        // Selection-aware and sub-row-aware. See AppendAudioArgs below.
+        AppendAudioArgs(sb, audioTracks);
 
         // ── Subtitles — per track ─────────────────────────────────────
         // All subtitle tracks are copied. Burn via overlay_cuda is backlog.
@@ -307,6 +360,81 @@ public static class CommandBuilder
         sb.Append($" \"{outputFile}\"");
 
         return sb.ToString();
+    }
+
+    // ── AppendAudioArgs ───────────────────────────────────────────────
+    // Builds the -map / -c:a / -b:a arguments for all audio tracks,
+    // respecting IsSelected and sub-row parent mapping.
+    //
+    // Key rules:
+    //   - Tracks with IsSelected = false are skipped entirely (not mapped).
+    //   - Normal parent rows map their own OriginalTrackIndex as the source.
+    //   - Sub-rows (IsSubRow = true) map their ParentTrackIndex as the source
+    //     (same lossless stream) but encode with their own Format/BitRate.
+    //   - outIdx is the 0-based OUTPUT index used for -c:a:N and -b:a:N.
+    //     It only increments for tracks that are actually included.
+    //   - ffmpeg -map 0:a:N uses the 0-based index WITHIN all audio streams
+    //     in the file. We convert OriginalTrackIndex (which is the overall
+    //     stream index including video) to the audio-relative index by
+    //     tracking the position of each audio stream in the collection.
+    //
+    // Example with 3 source audio streams (stream indexes 1, 2, 3):
+    //   Track 0 (stream 1, DTS-HD MA, selected, lossless) → -map 0:a:0 copy
+    //   SubRow  (stream 1, eac3 derived, selected)        → -map 0:a:0 eac3
+    //   Track 1 (stream 2, DTS, NOT selected)             → skipped
+    //   Track 2 (stream 3, AC3, selected)                 → -map 0:a:2 copy
+    //                                                        (source index 2, outIdx 2)
+    private static void AppendAudioArgs(
+        StringBuilder sb,
+        ObservableCollection<TranscodeAudioTrack> audioTracks)
+    {
+        // Build a lookup: OriginalTrackIndex → audio-relative source index.
+        // We need this because ffmpeg -map 0:a:N counts only audio streams,
+        // but OriginalTrackIndex is the overall ffprobe stream index which
+        // includes video (stream 0 is usually video, stream 1 is first audio).
+        // We derive the audio-relative index by collecting all unique parent
+        // OriginalTrackIndexes in collection order (sub-rows share their parent's).
+        var sourceIndexMap = new Dictionary<int, int>();
+        int audioRelIdx = 0;
+        foreach (var t in audioTracks.Where(t => !t.IsSubRow))
+        {
+            sourceIndexMap[t.OriginalTrackIndex] = audioRelIdx++;
+        }
+
+        int outIdx = 0;
+        foreach (var t in audioTracks)
+        {
+            if (!t.IsSelected) continue;
+
+            // Determine which source audio stream to map.
+            // Sub-rows use their parent's stream; parent rows use their own.
+            var sourceTrackIdx = t.IsSubRow ? t.ParentTrackIndex : t.OriginalTrackIndex;
+
+            if (!sourceIndexMap.TryGetValue(sourceTrackIdx, out var srcAudioIdx))
+                continue;   // safety: skip if index not found
+
+            var format = t.Format.ToLowerInvariant();
+
+            sb.Append($" -map 0:a:{srcAudioIdx}");
+
+            if (format == "keep" || string.IsNullOrWhiteSpace(format))
+            {
+                sb.Append($" -c:a:{outIdx} copy");
+            }
+            else
+            {
+                sb.Append($" -c:a:{outIdx} {format}");
+
+                var br = t.BitRate;
+                if (!string.IsNullOrWhiteSpace(br) &&
+                    !br.Equals("Keep", StringComparison.OrdinalIgnoreCase))
+                {
+                    sb.Append($" -b:a:{outIdx} {br}k");
+                }
+            }
+
+            outIdx++;
+        }
     }
 
     // ── Helper: check if indexes are already in ascending order ───────

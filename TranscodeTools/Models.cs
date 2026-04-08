@@ -207,6 +207,46 @@ public class TranscodeVideoTrack : ObservableBase
     // scale_cuda=format=p010le are needed. Not shown in the UI.
     public string PixelFormat { get; set; } = "";
 
+    // HDR color metadata — read from ffprobe stream fields.
+    // Passed through verbatim to ffmpeg color flags when the source is HDR.
+    // e.g. ColorPrimaries = "bt2020", ColorTransfer = "smpte2084", ColorSpace = "bt2020nc"
+    // Not shown in the UI.
+    public string ColorPrimaries { get; set; } = "";
+    public string ColorTransfer  { get; set; } = "";
+    public string ColorSpace     { get; set; } = "";
+
+    // Static HDR10 SEI metadata — read from ffprobe side_data_list.
+    // MasterDisplay: mastering display color volume (SEI 137), formatted as
+    //   G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min) — the exact string ffmpeg expects.
+    // MaxCll: content light level (SEI 144), formatted as "MaxCLL,MaxFALL".
+    // Both are empty strings for SDR sources or when not present in the stream.
+    // Not shown in the UI.
+    public string MasterDisplay { get; set; } = "";
+    public string MaxCll        { get; set; } = "";
+
+    // HasDoVi is true when the stream contains a Dolby Vision RPU side data record.
+    // When true: OutputFormat is locked to "copy (DoVi)", hwaccel/nvenc is bypassed,
+    // and the video row is highlighted amber in the UI.
+    // Not shown in the UI directly — drives OutputFormat value and row highlight.
+    public bool HasDoVi { get; set; } = false;
+
+    // HasHdr10Plus is true when the stream contains HDR10+ dynamic metadata
+    // (side_data_type = "HDR Dynamic Metadata"). HDR10+ passthrough is shelved
+    // pending an external tool pipeline — this flag is a visual marker only,
+    // highlighting the row light blue so files with HDR10+ data can be identified
+    // when we're ready to implement it. No functional effect on the encode.
+    public bool HasHdr10Plus { get; set; } = false;
+
+    // PresetMismatch is true when the preset restored from a saved settings file
+    // differs from AppSettings.Instance.DefaultPreset. Drives amber highlight on
+    // the Preset dropdown. Exempt when HasDoVi is true. Not shown directly.
+    public bool PresetMismatch { get; set; } = false;
+
+    // QualityFlagsMismatch is true when one or more NVENC quality flag tokens
+    // from AppSettings.Instance.NvencQualityFlags are absent from the saved
+    // command. Drives the Warning column in the video table. Exempt when HasDoVi.
+    public bool QualityFlagsMismatch { get; set; } = false;
+
     private string _trackInfo = "";
     public string TrackInfo
     {
@@ -249,6 +289,33 @@ public class TranscodeVideoTrack : ObservableBase
 public class TranscodeAudioTrack : ObservableBase
 {
     public int OriginalTrackIndex { get; set; }
+
+    // IsLossless is true when the source codec is lossless (TrueHD, DTS-HD MA,
+    // DTS:X, FLAC, PCM). Set at probe time by FfprobeService — never changes.
+    // Drives: + button visibility, Format/BitRate lock on parent rows.
+    // Not shown in the UI directly.
+    public bool IsLossless { get; set; } = false;
+
+    // IsSubRow is true for derived lossy tracks spawned from a lossless parent
+    // via the + button. Sub-rows share the parent's OriginalTrackIndex as their
+    // source but are encoded independently. Not shown in the UI directly —
+    // drives row indentation, background color, and - button visibility.
+    public bool IsSubRow { get; set; } = false;
+
+    // ParentTrackIndex holds the OriginalTrackIndex of the lossless parent for
+    // sub-rows. -1 for normal parent rows. Used by CommandBuilder to map the
+    // correct source stream index when building the derived encode command.
+    public int ParentTrackIndex { get; set; } = -1;
+
+    // IsSelected controls whether this track (or sub-row) is included in the
+    // output. Defaults to true — all tracks included unless user unchecks.
+    // When a parent is deselected, all its sub-rows are also deselected.
+    private bool _isSelected = true;
+    public bool IsSelected
+    {
+        get => _isSelected;
+        set { _isSelected = value; OnPropertyChanged(); }
+    }
 
     private string _trackInfo = "";
     public string TrackInfo

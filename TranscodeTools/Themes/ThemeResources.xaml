@@ -199,7 +199,7 @@
                             SnapsToDevicePixels="true"
                             BorderThickness="{TemplateBinding BorderThickness}"
                             BorderBrush="{DynamicResource BorderColor}"
-                            Background="{DynamicResource InputBg}"
+                            Background="{TemplateBinding Background}"
                             CornerRadius="4">
                         <Border x:Name="splitBorder"
                                 SnapsToDevicePixels="true"
@@ -260,6 +260,7 @@
 
     <Style TargetType="{x:Type ComboBox}">
         <Setter Property="Foreground"               Value="{DynamicResource ForegroundColor}"/>
+        <Setter Property="Background"               Value="{DynamicResource InputBg}"/>
         <Setter Property="FontSize"                 Value="13"/>
         <Setter Property="VerticalContentAlignment" Value="Center"/>
         <Setter Property="Padding"                  Value="6,4"/>

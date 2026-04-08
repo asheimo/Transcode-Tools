@@ -13,6 +13,11 @@
     <Window.Resources>
         <!-- BooleanToVisibilityConverter — used for HasYearWarning indicator -->
         <BooleanToVisibilityConverter x:Key="BoolToVisibility"/>
+        <!-- InverseBoolConverter — used to disable dropdowns when HasDoVi is true -->
+        <local:InverseBoolConverter x:Key="InverseBoolConverter"/>
+        <!-- PresetMismatchBrushConverter — returns amber brush when PresetMismatch is true,
+             transparent otherwise. Applied directly to ComboBox Background. -->
+        <local:PresetMismatchBrushConverter x:Key="PresetMismatchBrushConverter"/>
 
         <!-- Mode switcher radio button style -->
         <Style x:Key="ModeRadio" TargetType="RadioButton">
@@ -64,6 +69,7 @@
         <x:Array x:Key="VideoOutputFormatOptions" Type="sys:String">
             <sys:String>hevc (default)</sys:String>
             <sys:String>h.264</sys:String>
+            <sys:String>copy (DoVi)</sys:String>
         </x:Array>
         <x:Array x:Key="VideoPresetOptions" Type="sys:String">
             <sys:String>None</sys:String>
@@ -390,9 +396,10 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto" MinHeight="52" MaxHeight="104"/>
                         <RowDefinition Height="8"/>
-                        <!-- Audio: takes a proportional share of remaining space -->
+                        <!-- Audio: MinHeight increased to show ~3 rows without scrolling —
+                             avoids scroll-on-click confusion when the last row is selected. -->
                         <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*" MinHeight="52"/>
+                        <RowDefinition Height="*" MinHeight="110"/>
                         <RowDefinition Height="8"/>
                         <!-- Subtitles: takes a proportional share of remaining space -->
                         <RowDefinition Height="Auto"/>
@@ -511,9 +518,10 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto" MinHeight="52" MaxHeight="104"/>
                         <RowDefinition Height="8"/>
-                        <!-- Audio: takes a proportional share of remaining space -->
+                        <!-- Audio: MinHeight increased to show ~3 rows without scrolling —
+                             avoids scroll-on-click confusion when the last row is selected. -->
                         <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*" MinHeight="52"/>
+                        <RowDefinition Height="*" MinHeight="110"/>
                         <RowDefinition Height="8"/>
                         <!-- Subtitles: takes a proportional share of remaining space -->
                         <RowDefinition Height="Auto"/>
@@ -529,32 +537,43 @@
                             <GridView>
                                 <GridViewColumn Header="Track Info" Width="280" DisplayMemberBinding="{Binding TrackInfo}"/>
                                 <!-- Resolution: not currently functional; dropdown disabled pending implementation -->
+                                <!-- Resolution: not currently functional; dropdown disabled pending Phase 2 implementation.
+                                     IMPORTANT: When enabled, must use IsEnabled="{Binding HasDoVi, Converter={StaticResource InverseBoolConverter}}"
+                                     to lock it for DoVi streams, same as Output Format and Preset. -->
                                 <GridViewColumn Header="Resolution" Width="110">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
                                             <ComboBox SelectedItem="{Binding Resolution, Mode=TwoWay}"
                                                       ItemsSource="{StaticResource VideoResolutionOptions}"
-                                                      Width="100" IsEnabled="False"/>
+                                                      IsEnabled="False"
+                                                      Width="100"/>
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
-                                <!-- Output Format: hevc uses hevc_nvenc + 10-bit pipeline; h.264 uses h264_nvenc -->
+                                <!-- Output Format: hevc uses hevc_nvenc + 10-bit pipeline; h.264 uses h264_nvenc;
+                                     copy (DoVi) is set automatically when a Dolby Vision RPU is detected and
+                                     cannot be changed — re-encoding would destroy the DoVi metadata. -->
                                 <GridViewColumn Header="Output Format" Width="140">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
                                             <ComboBox SelectedItem="{Binding OutputFormat, Mode=TwoWay}"
                                                       ItemsSource="{StaticResource VideoOutputFormatOptions}"
+                                                      IsEnabled="{Binding HasDoVi, Converter={StaticResource InverseBoolConverter}}"
                                                       Width="130"/>
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
-                                <!-- Preset: None omits the -preset flag entirely; p1=fastest through p7=slowest/highest quality -->
+                                <!-- Preset: None omits the -preset flag entirely; p1=fastest through p7=slowest/highest quality.
+                                     Disabled for DoVi streams since those use -c:v copy and have no encode preset.
+                                     Filled amber when the saved preset differs from the app default. -->
                                 <GridViewColumn Header="Preset" Width="90">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
                                             <ComboBox SelectedItem="{Binding Preset, Mode=TwoWay}"
                                                       ItemsSource="{StaticResource VideoPresetOptions}"
-                                                      Width="80"/>
+                                                      IsEnabled="{Binding HasDoVi, Converter={StaticResource InverseBoolConverter}}"
+                                                      Width="80"
+                                                      Background="{Binding PresetMismatch, Converter={StaticResource PresetMismatchBrushConverter}}"/>
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
@@ -577,20 +596,46 @@
                     <ListView Grid.Row="4" x:Name="TranscodeAudioList"
                               BorderThickness="1" BorderBrush="{DynamicResource BorderColor}"
                               ScrollViewer.VerticalScrollBarVisibility="Auto">
+                        <!-- Row styling: sub-rows get a light indent background to distinguish
+                             them visually from parent tracks. DataTrigger on IsSubRow. -->
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsSubRow}" Value="True">
+                                        <Setter Property="Background" Value="#2A2A2A"/>
+                                        <Setter Property="Padding" Value="16,0,0,0"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ListView.ItemContainerStyle>
                         <ListView.View>
                             <GridView>
-                                <GridViewColumn Header="Track Info" Width="300" DisplayMemberBinding="{Binding TrackInfo}"/>
-                                <!-- Format: eac3 adds —–eac3 to options; Keep copies the stream -->
+                                <!-- IsSelected checkbox — default true, unchecking excludes track from output.
+                                     Unchecking a lossless parent also deselects all its sub-rows.
+                                     UpdateSourceTrigger=PropertyChanged ensures the binding writes back
+                                     to the model immediately on toggle, before View/Save Command reads it. -->
+                                <GridViewColumn Width="30">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                      HorizontalAlignment="Center"/>
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                                <GridViewColumn Header="Track Info" Width="270" DisplayMemberBinding="{Binding TrackInfo}"/>
+                                <!-- Format: locked to Keep on lossless parent rows (copy only).
+                                     Sub-rows and lossy parent rows are freely editable. -->
                                 <GridViewColumn Header="Format" Width="110">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
                                             <ComboBox SelectedItem="{Binding Format, Mode=TwoWay}"
                                                       ItemsSource="{StaticResource AudioFormatOptions}"
+                                                      IsEnabled="{Binding IsLossless, Converter={StaticResource InverseBoolConverter}}"
                                                       Width="100"/>
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
-                                <!-- Width: channel downmix target — disabled pending ffmpeg implementation -->
+                                <!-- Width: disabled pending Phase 2 implementation -->
                                 <GridViewColumn Header="Width" Width="110">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
@@ -600,13 +645,42 @@
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
-                                <!-- Bit Rate: used as -b:a when encoding; ignored when Format is Keep -->
+                                <!-- Bit Rate: locked on lossless parent rows (no encoding, bitrate irrelevant).
+                                     Sub-rows and lossy parent rows are freely editable. -->
                                 <GridViewColumn Header="Bit Rate (Kbps)" Width="130">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
                                             <ComboBox SelectedItem="{Binding BitRate, Mode=TwoWay}"
                                                       ItemsSource="{StaticResource AudioBitRateOptions}"
+                                                      IsEnabled="{Binding IsLossless, Converter={StaticResource InverseBoolConverter}}"
                                                       Width="120"/>
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                                <!-- + / - button column: + appears on lossless parent rows to add a derived
+                                     lossy sub-row. - appears on sub-rows to remove them. -->
+                                <GridViewColumn Width="30">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <!-- + button: visible on lossless parent rows only -->
+                                            <Button Content="+"
+                                                    Width="22" Height="22"
+                                                    FontWeight="Bold"
+                                                    Click="AddDerivedRow_Click"
+                                                    Tag="{Binding}"
+                                                    Visibility="{Binding IsLossless, Converter={StaticResource BoolToVisibility}}"/>
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                                <!-- — button column: visible on sub-rows only -->
+                                <GridViewColumn Width="30">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <Button Content="—"
+                                                    Width="22" Height="22"
+                                                    Click="RemoveDerivedRow_Click"
+                                                    Tag="{Binding}"
+                                                    Visibility="{Binding IsSubRow, Converter={StaticResource BoolToVisibility}}"/>
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>

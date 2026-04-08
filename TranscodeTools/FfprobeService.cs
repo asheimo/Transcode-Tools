@@ -212,20 +212,84 @@ public static class FfprobeService
             _    => "Keep"
         };
 
+        // ── HDR color metadata ────────────────────────────────────────
+        // ffprobe exposes color_primaries, color_transfer, color_space as
+        // top-level stream fields. These are passed through verbatim to
+        // ffmpeg's color flags so HDR10/HLG metadata survives the encode.
+        var colorPrimaries = s["color_primaries"]?.GetValue<string>() ?? "";
+        var colorTransfer  = s["color_transfer"]?.GetValue<string>()  ?? "";
+        var colorSpace     = s["color_space"]?.GetValue<string>()     ?? "";
+
+        // ── Dolby Vision detection ────────────────────────────────────
+        // DoVi RPU data appears as a side_data_list entry whose
+        // side_data_type is "DOVI configuration record".
+        // If found, the stream must be copied — NVENC cannot preserve the RPU.
+        var hasDoVi      = false;
+        var hasHdr10Plus  = false;
+        var masterDisplay = "";
+        var maxCll        = "";
+        var sideDataList = s["side_data_list"]?.AsArray();
+        if (sideDataList != null)
+        {
+            foreach (var entry in sideDataList)
+            {
+                if (entry == null) continue;
+                var sideType = entry["side_data_type"]?.GetValue<string>() ?? "";
+
+                if (sideType.Equals("DOVI configuration record",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    hasDoVi = true;
+                }
+                else if (sideType.Equals("HDR Dynamic Metadata",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    // HDR10+ dynamic per-frame metadata detected.
+                    // Passthrough is shelved pending external tool pipeline.
+                    // Flag only — no functional effect on the encode command.
+                    hasHdr10Plus = true;
+                }
+                else if (sideType.Equals("Mastering display metadata",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    masterDisplay = BuildMasterDisplay(entry);
+                }
+                else if (sideType.Equals("Content light level metadata",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    var maxContent = entry["max_content"]?.GetValue<int>() ?? 0;
+                    var maxAverage = entry["max_average"]?.GetValue<int>() ?? 0;
+                    maxCll = $"{maxContent},{maxAverage}";
+                }
+            }
+        }
+
+        // TrackInfo label — append [DoVi] so the user can see it in the table.
+        var trackInfo = hasDoVi
+            ? $"Video: {codec} {resolution} @ {fps} [DoVi]"
+            : $"Video: {codec} {resolution} @ {fps}";
+
+        // OutputFormat — locked to "copy (DoVi)" when DoVi is present;
+        // otherwise default to hevc_nvenc.
+        var outputFormat = hasDoVi ? "copy (DoVi)" : "hevc (default)";
+
         return new TranscodeVideoTrack
         {
             OriginalTrackIndex = index,
-            CodecName    = codec,
-            PixelFormat  = pixFmt,
-            // TrackInfo is the human-readable summary shown in the Transcode table.
-            // Uses the raw resolution string (e.g. "1920x1080") for full detail.
-            TrackInfo    = $"Video: {codec} {resolution} @ {fps}",
-            // Resolution uses the mapped "p" value so it matches a dropdown item.
-            Resolution   = resolutionItem,
-            // Default to "hevc (default)" — hevc is the preferred output format.
-            OutputFormat = "hevc (default)",
-            FrameRate    = fps,
-            Preset       = AppSettings.Instance.DefaultPreset
+            CodecName      = codec,
+            PixelFormat    = pixFmt,
+            ColorPrimaries = colorPrimaries,
+            ColorTransfer  = colorTransfer,
+            ColorSpace     = colorSpace,
+            MasterDisplay  = masterDisplay,
+            MaxCll         = maxCll,
+            HasDoVi        = hasDoVi,
+            HasHdr10Plus   = hasHdr10Plus,
+            TrackInfo      = trackInfo,
+            Resolution     = resolutionItem,
+            OutputFormat   = outputFormat,
+            FrameRate      = fps,
+            Preset         = AppSettings.Instance.DefaultPreset
         };
     }
 
@@ -250,15 +314,30 @@ public static class FfprobeService
     private static TranscodeAudioTrack ParseTranscodeAudio(JsonNode s, int index)
     {
         var tags     = s["tags"];
+        var codec    = s["codec_name"]?.GetValue<string>() ?? "";
+        var profile  = s["profile"]?.GetValue<string>()    ?? "";
         var format   = BuildAudioFormatLabel(s);
         var channels = BuildChannelLayout(s);
         var bitrate  = BuildBitRate(s);
         var lang     = tags?["language"]?.GetValue<string>() ?? "";
 
+        // ── Lossless detection ────────────────────────────────────────
+        // Determines whether the + expander is shown in the UI and whether
+        // the Format/BitRate dropdowns are locked on the parent row.
+        // TrueHD (with or without Atmos), DTS-HD MA, DTS:X, FLAC, and all
+        // PCM variants are considered lossless. All other codecs are lossy.
+        var isLossless = codec.Equals("truehd", StringComparison.OrdinalIgnoreCase)
+            || codec.Equals("flac", StringComparison.OrdinalIgnoreCase)
+            || codec.StartsWith("pcm_", StringComparison.OrdinalIgnoreCase)
+            || (codec.Equals("dts", StringComparison.OrdinalIgnoreCase) &&
+                (profile.Contains("DTS-HD MA", StringComparison.OrdinalIgnoreCase) ||
+                 profile.Contains("DTS:X",     StringComparison.OrdinalIgnoreCase)));
+
         return new TranscodeAudioTrack
         {
             OriginalTrackIndex = index,
-            TrackInfo = $"Audio: {format} {channels} {bitrate}Kbps [{lang}]".Trim(),
+            IsLossless = isLossless,
+            TrackInfo  = $"Audio: {format} {channels} {bitrate}Kbps [{lang}]".Trim(),
             // All three dropdowns default to "Keep" — meaning copy without re-encoding.
             // The user changes these only if they want to transcode a specific track.
             Format    = "Keep",
@@ -392,6 +471,52 @@ public static class FfprobeService
             return (bps / 1000).ToString();
 
         return "";
+    }
+
+    // Builds the mastering display string in the format ffmpeg's -master_display
+    // flag expects: G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min)
+    //
+    // ffprobe reports the chromaticity coordinates as rational strings
+    // (e.g. "17000/50000") and luminance as rational strings too
+    // (e.g. "10000000/10000" for peak luminance).
+    // ffmpeg wants the raw numerator values when the denominator is 50000
+    // for chromaticity, and luminance as integers (nits * 10000 for max,
+    // nits * 10000 for min — i.e. the raw ffprobe numerator directly).
+    //
+    // Returns an empty string if any required field is missing.
+    private static string BuildMasterDisplay(JsonNode entry)
+    {
+        try
+        {
+            // Each coordinate is stored as a fraction string "num/den".
+            // We pass the raw rational string directly — ffmpeg accepts
+            // "G(17000/50000,17000/50000)..." as well as integer forms.
+            var rx = entry["red_x"]?.GetValue<string>()         ?? "";
+            var ry = entry["red_y"]?.GetValue<string>()         ?? "";
+            var gx = entry["green_x"]?.GetValue<string>()       ?? "";
+            var gy = entry["green_y"]?.GetValue<string>()       ?? "";
+            var bx = entry["blue_x"]?.GetValue<string>()        ?? "";
+            var by = entry["blue_y"]?.GetValue<string>()        ?? "";
+            var wx = entry["white_point_x"]?.GetValue<string>() ?? "";
+            var wy = entry["white_point_y"]?.GetValue<string>() ?? "";
+            var lmax = entry["max_luminance"]?.GetValue<string>() ?? "";
+            var lmin = entry["min_luminance"]?.GetValue<string>() ?? "";
+
+            // If any field is missing, don't emit a partial -master_display
+            if (string.IsNullOrEmpty(rx) || string.IsNullOrEmpty(ry) ||
+                string.IsNullOrEmpty(gx) || string.IsNullOrEmpty(gy) ||
+                string.IsNullOrEmpty(bx) || string.IsNullOrEmpty(by) ||
+                string.IsNullOrEmpty(wx) || string.IsNullOrEmpty(wy) ||
+                string.IsNullOrEmpty(lmax) || string.IsNullOrEmpty(lmin))
+                return "";
+
+            return $"G({gx},{gy})B({bx},{by})R({rx},{ry})WP({wx},{wy})L({lmax},{lmin})";
+        }
+        catch
+        {
+            // If anything goes wrong parsing the entry, skip gracefully
+            return "";
+        }
     }
 
     // Reads the container duration from the format node and returns it as
