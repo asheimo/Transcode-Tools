@@ -307,10 +307,11 @@ public partial class MainWindow : Window
         // ── Load-time order: title case first, resolution append second ──
         // Title case runs first so the resolution suffix (e.g. -1080p) is
         // never passed through ToTitleCase and mangled to -1080P.
-        if (AppSettings.Instance.TitleCaseEnabled && movieNodes.Count > 0)
+        // Both features are remux-only — transcode assumes folder names are correct.
+        if (!_isTranscodeMode && AppSettings.Instance.TitleCaseEnabled && movieNodes.Count > 0)
             ApplyTitleCaseCorrections(rootPath, movieNodes);
 
-        if (AppSettings.Instance.ResolutionAppendEnabled && movieNodes.Count > 0)
+        if (!_isTranscodeMode && AppSettings.Instance.ResolutionAppendEnabled && movieNodes.Count > 0)
             ApplyResolutionAppendAsync(rootPath, movieNodes);
     }
 
@@ -936,6 +937,9 @@ public partial class MainWindow : Window
             foreach (var t in result.TranscodeAudio)    TranscodeAudioTracks.Add(t);
             foreach (var t in result.TranscodeSubtitle) TranscodeSubtitleTracks.Add(t);
 
+            RefreshVideoWarningColumn();
+            RefreshInterlacedColumn();
+
             // If a settings file exists for this file, load it to restore
             // previously saved track selections and order.
             if (FileTree.SelectedItem is FileLeafNode leaf)
@@ -1189,6 +1193,7 @@ public partial class MainWindow : Window
         }
 
         RefreshVideoWarningColumn();
+        RefreshInterlacedColumn();
     }
 
     // Parses a quality flags string into "-flag value" pairs.
@@ -1269,6 +1274,53 @@ public partial class MainWindow : Window
         }
     }
 
+    // Adds or removes the Interlaced column in TranscodeVideoList based on whether
+    // any video track has IsInterlaced = true.
+    // The column is added dynamically so it only appears when relevant.
+    private void RefreshInterlacedColumn()
+    {
+        if (TranscodeVideoList.View is not GridView gv) return;
+
+        const string interlacedHeader = "Notice";
+        var existing = gv.Columns.FirstOrDefault(c =>
+            c.Header?.ToString() == interlacedHeader);
+
+        var hasInterlaced = TranscodeVideoTracks.Any(t => t.IsInterlaced);
+
+        if (hasInterlaced && existing == null)
+        {
+            var col = new GridViewColumn
+            {
+                Header = interlacedHeader,
+                Width  = 90
+            };
+
+            var template = new DataTemplate();
+            var factory  = new FrameworkElementFactory(typeof(TextBlock));
+            factory.SetValue(TextBlock.TextProperty, "Interlaced");
+            factory.SetValue(TextBlock.ForegroundProperty,
+                new System.Windows.Media.SolidColorBrush(
+                    System.Windows.Media.Color.FromRgb(0x9B, 0x59, 0xB6)));
+            factory.SetValue(TextBlock.FontSizeProperty, 11.0);
+            factory.SetValue(TextBlock.FontWeightProperty, FontWeights.SemiBold);
+            factory.SetValue(TextBlock.TextAlignmentProperty, TextAlignment.Center);
+            factory.SetValue(TextBlock.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            factory.SetValue(TextBlock.VisibilityProperty,
+                new System.Windows.Data.Binding("IsInterlaced")
+                {
+                    Converter = new BooleanToVisibilityConverter()
+                });
+
+            template.VisualTree = factory;
+            col.CellTemplate    = template;
+            gv.Columns.Add(col);
+        }
+        else if (!hasInterlaced && existing != null)
+        {
+            gv.Columns.Remove(existing);
+        }
+    }
+
     // Parses a track index list from a command string.
     // e.g. given "--audio-tracks 1,3,2" returns [1, 3, 2]
     // Returns an empty list if the flag is not found.
@@ -1311,8 +1363,9 @@ public partial class MainWindow : Window
         TranscodeAudioTracks.Clear();
         TranscodeSubtitleTracks.Clear();
 
-        // Remove the Warning column if it was showing for the previous file.
+        // Remove the Warning and Interlaced columns if showing for the previous file.
         RefreshVideoWarningColumn();
+        RefreshInterlacedColumn();
 
         // Disable drag until tracks are loaded and 2+ are selected.
         if (RemuxAudioList != null)

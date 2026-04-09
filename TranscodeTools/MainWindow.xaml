@@ -548,7 +548,53 @@
                               ScrollViewer.VerticalScrollBarVisibility="Auto">
                         <ListView.View>
                             <GridView>
-                                <GridViewColumn Header="Track Info" Width="280" DisplayMemberBinding="{Binding TrackInfo}"/>
+                                <!-- Track Info cell — background coloured per stream type:
+                                     DoVi       → #FFE08A amber
+                                     HDR10+     → #3498DB solid blue
+                                     Interlaced → #9B59B6 medium purple
+                                     White text on purple/blue, black on amber. -->
+                                <GridViewColumn Header="Track Info" Width="280">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <Border Padding="2,0">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding HasDoVi}" Value="True">
+                                                                <Setter Property="Background" Value="#FFE08A"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding HasHdr10Plus}" Value="True">
+                                                                <Setter Property="Background" Value="#3498DB"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding IsInterlaced}" Value="True">
+                                                                <Setter Property="Background" Value="#9B59B6"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                                <TextBlock Text="{Binding TrackInfo}"
+                                                           ToolTip="{Binding TrackInfo}">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Foreground" Value="{DynamicResource ForegroundColor}"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding HasDoVi}" Value="True">
+                                                                    <Setter Property="Foreground" Value="Black"/>
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding HasHdr10Plus}" Value="True">
+                                                                    <Setter Property="Foreground" Value="White"/>
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding IsInterlaced}" Value="True">
+                                                                    <Setter Property="Foreground" Value="White"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                            </Border>
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
                                 <!-- Resolution: not currently functional; dropdown disabled pending implementation -->
                                 <!-- Resolution: not currently functional; dropdown disabled pending Phase 2 implementation.
                                      IMPORTANT: When enabled, must use IsEnabled="{Binding HasDoVi, Converter={StaticResource InverseBoolConverter}}"

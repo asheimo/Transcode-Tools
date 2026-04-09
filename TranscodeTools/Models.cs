@@ -231,6 +231,11 @@ public class TranscodeVideoTrack : ObservableBase
     // Not shown in the UI directly — drives OutputFormat value and row highlight.
     public bool HasDoVi { get; set; } = false;
 
+    // IsInterlaced is true when ffprobe reports field_order as tt, bb, tb, or bt.
+    // When true, yadif_cuda=mode=1 is added to the filter chain in CommandBuilder,
+    // deinterlacing on the GPU before encode. Shown in TrackInfo as [Interlaced].
+    public bool IsInterlaced { get; set; } = false;
+
     // HasHdr10Plus is true when the stream contains HDR10+ dynamic metadata
     // (side_data_type = "HDR Dynamic Metadata"). HDR10+ passthrough is shelved
     // pending an external tool pipeline — this flag is a visual marker only,

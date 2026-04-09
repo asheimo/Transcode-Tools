@@ -199,6 +199,15 @@ public static class FfprobeService
         var resolution = BuildResolution(s);
         var fps        = BuildFps(s);
 
+        // field_order: "tt" (top-first) or "bb" (bottom-first) are true interlaced.
+        // "tb" and "bt" are mixed — also treated as interlaced for safety.
+        // "progressive" or absent means no deinterlacing needed.
+        var fieldOrder   = s["field_order"]?.GetValue<string>() ?? "";
+        var isInterlaced = fieldOrder.Equals("tt", StringComparison.OrdinalIgnoreCase) ||
+                           fieldOrder.Equals("bb", StringComparison.OrdinalIgnoreCase) ||
+                           fieldOrder.Equals("tb", StringComparison.OrdinalIgnoreCase) ||
+                           fieldOrder.Equals("bt", StringComparison.OrdinalIgnoreCase);
+
         // Map the raw resolution (e.g. "1920x1080") to the nearest dropdown item.
         // We extract the height and match it to a known "p" value.
         // If the height doesn't match a known item, fall back to "Keep".
@@ -265,9 +274,10 @@ public static class FfprobeService
         }
 
         // TrackInfo label — append [DoVi] so the user can see it in the table.
+        // Interlaced is indicated via the dedicated Interlaced column, not TrackInfo.
         var trackInfo = hasDoVi
             ? $"Video: {codec} {resolution} @ {fps} [DoVi]"
-            : $"Video: {codec} {resolution} @ {fps}";
+            :  $"Video: {codec} {resolution} @ {fps}";
 
         // OutputFormat — locked to "copy (DoVi)" when DoVi is present;
         // otherwise default to hevc_nvenc.
@@ -284,6 +294,7 @@ public static class FfprobeService
             MasterDisplay  = masterDisplay,
             MaxCll         = maxCll,
             HasDoVi        = hasDoVi,
+            IsInterlaced   = isInterlaced,
             HasHdr10Plus   = hasHdr10Plus,
             TrackInfo      = trackInfo,
             Resolution     = resolutionItem,

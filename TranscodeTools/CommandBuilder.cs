@@ -345,13 +345,29 @@ public static class CommandBuilder
                 sb.Append($" -max_cll \"{video.MaxCll}\"");
         }
 
-        if (needs10bit)
+        // ── Video filter chain ────────────────────────────────────────
+        // Two filters may be needed, and must be chained with a comma
+        // when both are present: -filter:v yadif_cuda=mode=1,scale_cuda=format=p010le
+        //
+        // yadif_cuda=mode=1 — GPU deinterlace (mode=1 = one output frame per
+        //   input frame, preserving the original frame rate). Only when interlaced.
+        //
+        // scale_cuda=format=p010le — converts 8-bit decoded frames to 10-bit
+        //   on the GPU before encoding. Only when output is HEVC and source is 8-bit.
+        //   Paired with -highbitdepth true on the encoder.
+        //
+        // Order matters: deinterlace must come before pixel format conversion.
+        var isInterlaced = video?.IsInterlaced ?? false;
+
+        if (isInterlaced || needs10bit)
         {
-            // -highbitdepth true enables 10-bit output in hevc_nvenc.
-            // scale_cuda converts the decoded frames to p010le (10-bit)
-            // on the GPU before encoding, keeping the full pipeline on device.
-            sb.Append(" -highbitdepth true");
-            sb.Append(" -filter:v scale_cuda=format=p010le");
+            if (needs10bit)
+                sb.Append(" -highbitdepth true");
+
+            var filterParts = new List<string>();
+            if (isInterlaced) filterParts.Add("yadif_cuda=mode=1");
+            if (needs10bit)   filterParts.Add("scale_cuda=format=p010le");
+            sb.Append($" -filter:v {string.Join(",", filterParts)}");
         }
 
         // ── Audio — per track ─────────────────────────────────────────
