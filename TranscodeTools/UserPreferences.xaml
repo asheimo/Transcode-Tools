@@ -293,6 +293,63 @@
                     </StackPanel>
                 </Border>
 
+                <!-- ── RUN section ───────────────────────────────────── -->
+                <TextBlock Text="RUN"
+                           Style="{StaticResource SectionHeader}"/>
+
+                <Border Background="{DynamicResource SurfaceBg}"
+                        BorderBrush="{DynamicResource BorderColor}"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Padding="12,8">
+                    <StackPanel>
+
+                        <!-- Write Log Files -->
+                        <CheckBox x:Name="ChkWriteLogFiles"
+                                  Content="Write Log Files"
+                                  HorizontalAlignment="Left"
+                                  Margin="0,4,0,4"
+                                  Checked="ChkWriteLogFiles_Changed"
+                                  Unchecked="ChkWriteLogFiles_Changed"/>
+                        <TextBlock Text="Writes a log file per processed file to &lt;OutputDirectory&gt;\Logs\&lt;timestamp&gt;\. Failed files are named with a -FAILED suffix."
+                                   Foreground="{DynamicResource SubtleForeground}"
+                                   FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Margin="22,0,0,8"/>
+
+                        <!-- Verbose Logging — indented under Write Log Files -->
+                        <CheckBox x:Name="ChkVerboseLogging"
+                                  Content="Verbose Logging"
+                                  HorizontalAlignment="Left"
+                                  Margin="22,4,0,4"
+                                  IsEnabled="False"
+                                  Checked="ChkVerboseLogging_Changed"
+                                  Unchecked="ChkVerboseLogging_Changed"/>
+                        <TextBlock Text="When enabled, ffmpeg output is redirected to the log file at the selected log level. The Run window shows an indeterminate progress bar instead of stats."
+                                   Foreground="{DynamicResource SubtleForeground}"
+                                   FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Margin="44,0,0,8"/>
+
+                        <!-- ffmpeg Log Level -->
+                        <StackPanel Orientation="Horizontal" Margin="22,0,0,8">
+                            <TextBlock Text="ffmpeg Log Level:"
+                                       Style="{StaticResource PrefLabel}"
+                                       VerticalAlignment="Center"/>
+                            <ComboBox x:Name="CbxFfmpegLogLevel"
+                                      VerticalContentAlignment="Center"
+                                      Width="90"
+                                      IsEnabled="False">
+                                <sys:String>warning</sys:String>
+                                <sys:String>info</sys:String>
+                                <sys:String>verbose</sys:String>
+                                <sys:String>debug</sys:String>
+                            </ComboBox>
+                        </StackPanel>
+
+                    </StackPanel>
+                </Border>
+
             </StackPanel>
         </ScrollViewer>
     </DockPanel>

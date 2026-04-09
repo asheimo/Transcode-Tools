@@ -117,7 +117,16 @@
                              TextWrapping="Wrap"
                              VerticalScrollBarVisibility="Auto"
                              AcceptsReturn="True"
-                             Padding="8"/>
+                             Padding="8">
+                        <TextBox.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem x:Name="ViewLogMenuItem"
+                                          Header="View Log"
+                                          IsEnabled="False"
+                                          Click="ViewLogMenuItem_Click"/>
+                            </ContextMenu>
+                        </TextBox.ContextMenu>
+                    </TextBox>
                 </Border>
             </Grid>
 

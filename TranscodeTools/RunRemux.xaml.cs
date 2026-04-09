@@ -17,6 +17,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
+using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -34,6 +35,15 @@ public partial class RunRemux : Window
     private Process?         _currentProcess;
     private bool             _cancelRequested;
     private bool             _isRunning;
+
+    // ── Log file state ────────────────────────────────────────────────
+    // Timestamp folder created once per run — shared across all files.
+    // _currentLogPath tracks the log file for the file currently processing,
+    // so View Log can open it after the run completes.
+    // _lastRunLogPaths maps FolderName\FileName → log path for right-click.
+    private string           _runTimestamp       = "";
+    private string?          _currentLogPath;
+    private readonly Dictionary<string, string> _lastRunLogPaths = new();
 
     // Suppresses SelectAll sync while PopulateFolderTree rebuilds the tree,
     // preventing spurious check/uncheck events from resetting SelectAllCheckBox.
@@ -57,6 +67,8 @@ public partial class RunRemux : Window
     // ── Window loaded ─────────────────────────────────────────────────
     private void RunRemux_Loaded(object sender, RoutedEventArgs e)
     {
+        if (!AppSettings.Instance.WriteLogFiles)
+            OutputLog.ContextMenu = null;
         PopulateFolderTree();
     }
 
@@ -81,7 +93,8 @@ public partial class RunRemux : Window
                 .Select(Path.GetFileName)
                 .Where(name => name != null &&
                                !name.Equals("Remux",     StringComparison.OrdinalIgnoreCase) &&
-                               !name.Equals("Transcode", StringComparison.OrdinalIgnoreCase))
+                               !name.Equals("Transcode", StringComparison.OrdinalIgnoreCase) &&
+                               !name.Equals("Logs",      StringComparison.OrdinalIgnoreCase))
                 .OrderBy(name => name);
 
             foreach (var folderName in folders)
@@ -357,6 +370,11 @@ public partial class RunRemux : Window
         ShowFilesCheckBox.IsEnabled = false;
         OutputLog.Clear();
 
+        // Create a single timestamp folder for this entire run
+        _runTimestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+        _lastRunLogPaths.Clear();
+        ViewLogMenuItem.IsEnabled  = false;
+
         foreach (var file in filesToProcess)
         {
             if (_cancelRequested) break;
@@ -423,119 +441,191 @@ public partial class RunRemux : Window
         var settingsFile = Path.Combine(_inputDirectory, modeFolder,
                                file.FolderName, nameNoExt + ".txt");
 
-        if (File.Exists(settingsFile))
+        var settings        = AppSettings.Instance;
+        var writeLog        = settings.WriteLogFiles;
+        var verboseLogging  = writeLog && settings.VerboseLogging;
+
+        // ── Prepare log file if enabled ───────────────────────────────
+        StreamWriter? logWriter = null;
+        _currentLogPath = null;
+
+        if (writeLog)
         {
-            // ── Run the saved command ─────────────────────────────────
-            var command = File.ReadAllText(settingsFile).Trim();
-            if (string.IsNullOrWhiteSpace(command)) return;
-
-            // Ensure output folder exists
-            var outputFolder = Path.Combine(_outputDirectory, file.FolderName);
-            Directory.CreateDirectory(outputFolder);
-
-            string exe, args;
-
-            if (_isTranscodeMode)
-            {
-                // ── Transcode: the saved command is a complete ffmpeg invocation ──
-                // Format: "C:\path\ffmpeg.exe" -hwaccel cuda ... "input.mkv" "output.mkv"
-                // Split the first quoted token as the executable, pass the rest as args.
-                // No working directory override needed — the output path is explicit
-                // in the command rather than written to the current directory.
-                if (command.StartsWith("\""))
-                {
-                    var endQuote = command.IndexOf('"', 1);
-                    exe  = command.Substring(1, endQuote - 1);
-                    args = command.Substring(endQuote + 1).Trim();
-                }
-                else
-                {
-                    var firstSpace = command.IndexOf(' ');
-                    exe  = firstSpace > 0 ? command.Substring(0, firstSpace) : command;
-                    args = firstSpace > 0 ? command.Substring(firstSpace + 1).Trim() : "";
-                }
-
-                // Log a per-track summary before starting the encode
-                await LogTranscodeSummaryAsync(command);
-
-                await RunProcessAsync(exe, args);
-            }
-            else
-            {
-                // ── Remux: split the first quoted token as the executable ──
-                // e.g. "C:\bin\mkvmerge.exe" --output "..." "input.mkv"
-                if (command.StartsWith("\""))
-                {
-                    var endQuote = command.IndexOf('"', 1);
-                    exe  = command.Substring(1, endQuote - 1);
-                    args = command.Substring(endQuote + 1).Trim();
-                }
-                else
-                {
-                    var firstSpace = command.IndexOf(' ');
-                    exe  = firstSpace > 0 ? command.Substring(0, firstSpace) : command;
-                    args = firstSpace > 0 ? command.Substring(firstSpace + 1).Trim() : "";
-                }
-
-                await RunProcessAsync(exe, args);
-            }
-        }
-        else if (_isTranscodeMode)
-        {
-            // ── Transcode: no settings file yet — build from ffprobe defaults ──
-            // Probe the file, build a command using default track settings
-            // (hevc, preset as configured in User Preferences, all audio Keep),
-            // save it to disk for history, then run it. This mirrors what the UI
-            // would show on a fresh file selection with no changes made.
             try
             {
-                var inputFile = Path.Combine(_inputDirectory, file.FolderName, file.FileName);
-                var probe     = await FfprobeService.ProbeFileAsync(inputFile);
+                var logDir = Path.Combine(_outputDirectory, "Logs", _runTimestamp,
+                                          file.FolderName);
+                Directory.CreateDirectory(logDir);
+                var logFileName = nameNoExt + ".log";
+                var logPath     = Path.Combine(logDir, logFileName);
+                _currentLogPath = logPath;
+                _lastRunLogPaths[$"{file.FolderName}\\{file.FileName}"] = logPath;
 
-                var videoTracks    = new System.Collections.ObjectModel.ObservableCollection<TranscodeVideoTrack>(probe.TranscodeVideo);
-                var audioTracks    = new System.Collections.ObjectModel.ObservableCollection<TranscodeAudioTrack>(probe.TranscodeAudio);
-                var subtitleTracks = new System.Collections.ObjectModel.ObservableCollection<TranscodeSubtitleTrack>(probe.TranscodeSubtitle);
-
-                var command = CommandBuilder.BuildTranscodeCommand(
-                    _outputDirectory, file.FolderName, file.FileName,
-                    _inputDirectory, videoTracks, audioTracks, subtitleTracks);
-
-                // Save to disk for history and future reference
-                var settingsDir = Path.Combine(_inputDirectory, "Transcode", file.FolderName);
-                Directory.CreateDirectory(settingsDir);
-                File.WriteAllText(settingsFile, command, System.Text.Encoding.UTF8);
-
-                AppendLog($"  (No settings file found — built from defaults and saved)");
-
-                // Ensure output folder exists then run
-                Directory.CreateDirectory(Path.Combine(_outputDirectory, file.FolderName));
-                await LogTranscodeSummaryAsync(command);
-
-                var exe  = command.StartsWith("\"")
-                    ? command.Substring(1, command.IndexOf('"', 1) - 1)
-                    : command.Substring(0, command.IndexOf(' '));
-                var args = command.StartsWith("\"")
-                    ? command.Substring(command.IndexOf('"', 1) + 1).Trim()
-                    : command.Substring(command.IndexOf(' ') + 1).Trim();
-
-                await RunProcessAsync(exe, args);
+                logWriter = new StreamWriter(logPath, append: false, System.Text.Encoding.UTF8);
+                logWriter.WriteLine($"TranscodeTools Log");
+                logWriter.WriteLine($"Run:  {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+                logWriter.WriteLine($"File: {file.FolderName}\\{file.FileName}");
+                logWriter.WriteLine(new string('-', 60));
+                logWriter.WriteLine();
             }
             catch (Exception ex)
             {
-                AppendLog($"  Error building command: {ex.Message}");
+                AppendLog($"  Warning: could not create log file: {ex.Message}");
+                logWriter = null;
             }
         }
-        else
-        {
-            // ── Remux: no settings file — robocopy the file as-is ─────
-            var sourceFolder = Path.Combine(_inputDirectory, file.FolderName);
-            var destFolder   = Path.Combine(_outputDirectory, file.FolderName);
-            var robocopyArgs = $"\"{sourceFolder}\" \"{destFolder}\" \"{file.FileName}\" " +
-                               AppSettings.Instance.RoboCopy_Defaults;
 
-            Directory.CreateDirectory(destFolder);
-            await RunProcessAsync("robocopy", robocopyArgs);
+        try
+        {
+            if (File.Exists(settingsFile))
+            {
+                var command = File.ReadAllText(settingsFile).Trim();
+                if (string.IsNullOrWhiteSpace(command)) return;
+
+                // In verbose mode, swap the loglevel flags in the saved command.
+                // Saved commands always contain -loglevel error -stats (non-verbose).
+                // We replace that token pair with the verbose flags at runtime so
+                // the file on disk always reflects the canonical non-verbose form.
+                if (verboseLogging && _isTranscodeMode)
+                    command = SwapLogFlags(command);
+
+                // Show command in window and write to log
+                AppendLog($"Command: {command}");
+                AppendLog("");
+                logWriter?.WriteLine($"Command: {command}");
+                logWriter?.WriteLine();
+
+                var outputFolder = Path.Combine(_outputDirectory, file.FolderName);
+                Directory.CreateDirectory(outputFolder);
+
+                string exe, args;
+
+                if (_isTranscodeMode)
+                {
+                    if (command.StartsWith("\""))
+                    {
+                        var endQuote = command.IndexOf('"', 1);
+                        exe  = command.Substring(1, endQuote - 1);
+                        args = command.Substring(endQuote + 1).Trim();
+                    }
+                    else
+                    {
+                        var firstSpace = command.IndexOf(' ');
+                        exe  = firstSpace > 0 ? command.Substring(0, firstSpace) : command;
+                        args = firstSpace > 0 ? command.Substring(firstSpace + 1).Trim() : "";
+                    }
+
+                    await LogTranscodeSummaryAsync(command, logWriter);
+                    await RunProcessAsync(exe, args, logWriter: logWriter,
+                                          verboseLogging: verboseLogging);
+                }
+                else
+                {
+                    if (command.StartsWith("\""))
+                    {
+                        var endQuote = command.IndexOf('"', 1);
+                        exe  = command.Substring(1, endQuote - 1);
+                        args = command.Substring(endQuote + 1).Trim();
+                    }
+                    else
+                    {
+                        var firstSpace = command.IndexOf(' ');
+                        exe  = firstSpace > 0 ? command.Substring(0, firstSpace) : command;
+                        args = firstSpace > 0 ? command.Substring(firstSpace + 1).Trim() : "";
+                    }
+
+                    await RunProcessAsync(exe, args, logWriter: logWriter,
+                                          verboseLogging: false);
+                }
+            }
+            else if (_isTranscodeMode)
+            {
+                try
+                {
+                    var inputFile = Path.Combine(_inputDirectory, file.FolderName, file.FileName);
+                    var probe     = await FfprobeService.ProbeFileAsync(inputFile);
+
+                    var videoTracks    = new ObservableCollection<TranscodeVideoTrack>(probe.TranscodeVideo);
+                    var audioTracks    = new ObservableCollection<TranscodeAudioTrack>(probe.TranscodeAudio);
+                    var subtitleTracks = new ObservableCollection<TranscodeSubtitleTrack>(probe.TranscodeSubtitle);
+
+                    var command = CommandBuilder.BuildTranscodeCommand(
+                        _outputDirectory, file.FolderName, file.FileName,
+                        _inputDirectory, videoTracks, audioTracks, subtitleTracks,
+                        verboseLogging);
+
+                    // No settings file — run from defaults but do NOT save to disk.
+                    // The user should explicitly save settings from the main window.
+                    AppendLog($"  (No settings file found — running from defaults)");
+                    AppendLog($"Command: {command}");
+                    AppendLog("");
+                    logWriter?.WriteLine($"Command: {command}");
+                    logWriter?.WriteLine();
+
+                    Directory.CreateDirectory(Path.Combine(_outputDirectory, file.FolderName));
+                    await LogTranscodeSummaryAsync(command, logWriter);
+
+                    var exe  = command.StartsWith("\"")
+                        ? command.Substring(1, command.IndexOf('"', 1) - 1)
+                        : command.Substring(0, command.IndexOf(' '));
+                    var args = command.StartsWith("\"")
+                        ? command.Substring(command.IndexOf('"', 1) + 1).Trim()
+                        : command.Substring(command.IndexOf(' ') + 1).Trim();
+
+                    await RunProcessAsync(exe, args, logWriter: logWriter,
+                                          verboseLogging: verboseLogging);
+                }
+                catch (Exception ex)
+                {
+                    AppendLog($"  Error building command: {ex.Message}");
+                    logWriter?.WriteLine($"Error building command: {ex.Message}");
+                }
+            }
+            else
+            {
+                // Remux: no settings file — robocopy
+                var sourceFolder = Path.Combine(_inputDirectory, file.FolderName);
+                var destFolder   = Path.Combine(_outputDirectory, file.FolderName);
+                var robocopyArgs = $"\"{sourceFolder}\" \"{destFolder}\" \"{file.FileName}\" " +
+                                   AppSettings.Instance.RoboCopy_Defaults;
+
+                AppendLog($"Command: robocopy {robocopyArgs}");
+                AppendLog("");
+                logWriter?.WriteLine($"Command: robocopy {robocopyArgs}");
+                logWriter?.WriteLine();
+
+                Directory.CreateDirectory(destFolder);
+                await RunProcessAsync("robocopy", robocopyArgs, logWriter: logWriter,
+                                      verboseLogging: false);
+            }
         }
+        finally
+        {
+            if (logWriter != null)
+            {
+                logWriter.WriteLine();
+                logWriter.WriteLine(new string('-', 60));
+                logWriter.WriteLine($"Completed: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+                logWriter.Dispose();
+            }
+
+            // Enable View Log if we wrote any log files this run
+            if (writeLog && !string.IsNullOrEmpty(_runTimestamp))
+                ViewLogMenuItem.IsEnabled = true;
+        }
+    }
+
+    // Swaps -loglevel error -stats in a saved command for the verbose flags.
+    // Called at runtime only — the file on disk always stores the non-verbose form.
+    private static string SwapLogFlags(string command)
+    {
+        var settings   = AppSettings.Instance;
+        var verboseStr = $"-loglevel {settings.FfmpegLogLevel}";
+        // Replace the canonical non-verbose tokens with the verbose form.
+        // Handle both orderings that CommandBuilder may produce.
+        command = command.Replace("-loglevel error -stats", verboseStr);
+        command = command.Replace("-loglevel error", verboseStr);
+        return command;
     }
 
     // ── Transcode summary logger ──────────────────────────────────────
@@ -552,10 +642,12 @@ public partial class RunRemux : Window
     //   Subtitle: 4, PGS → copy
     //   Subtitle: 5, PGS → copy
     //   Output:   F:\Transcoded\Casino Royale (2006)\Casino Royale (2006).mkv
-    private async Task LogTranscodeSummaryAsync(string command)
+    private async Task LogTranscodeSummaryAsync(string command, StreamWriter? logWriter = null)
     {
         try
         {
+            // Local helper — writes to both the Run window and the log file.
+            void LogLine(string msg) { AppendLog(msg); logWriter?.WriteLine(msg); }
             // ── Extract input and output paths from command ────────────
             // Input path follows -i, output path is the last quoted token.
             var inputPath  = ExtractQuotedArg(command, "-i");
@@ -566,9 +658,9 @@ public partial class RunRemux : Window
             // ── Probe the input file ──────────────────────────────────
             var probe = await FfprobeService.ProbeFileAsync(inputPath);
 
-            AppendLog($"Input:    {Path.GetFileName(inputPath)}");
+            LogLine($"Input:    {Path.GetFileName(inputPath)}");
             if (!string.IsNullOrWhiteSpace(probe.Duration))
-                AppendLog($"Runtime:  {probe.Duration}");
+                LogLine($"Runtime:  {probe.Duration}");
 
             // ── Parse command decisions ───────────────────────────────
             // Read encode codec (after -i), preset, and per-track decisions.
@@ -593,12 +685,11 @@ public partial class RunRemux : Window
             var video = probe.RemuxVideo.FirstOrDefault();
             if (video != null)
             {
-                AppendLog($"Video:    {video.OriginalTrackIndex}, {video.VideoFormat}, " +
-                          $"{video.Resolution}, {video.Fps}fps → {encodeCodec}, preset {preset}");
+                LogLine($"Video:    {video.OriginalTrackIndex}, {video.VideoFormat}, " +
+                        $"{video.Resolution}, {video.Fps}fps → {encodeCodec}, preset {preset}");
             }
 
             // ── Audio summary — per track ─────────────────────────────
-            // Build a map of audio-relative index → codec decision from command.
             var audioDecisions = new Dictionary<int, string>();
             var audioBitrates  = new Dictionary<int, string>();
             for (int i = 0; i < tokens.Length - 1; i++)
@@ -625,7 +716,7 @@ public partial class RunRemux : Window
                 var width    = string.IsNullOrWhiteSpace(t.Width)       ? "" : $" {t.Width}";
                 var srcBr    = string.IsNullOrWhiteSpace(t.BitRate)     ? "" : $" {t.BitRate}k";
 
-                AppendLog($"Audio:    {t.OriginalTrackIndex}, {codec}{width}{srcBr} → {decision}{br}");
+                LogLine($"Audio:    {t.OriginalTrackIndex}, {codec}{width}{srcBr} → {decision}{br}");
             }
 
             // ── Subtitle summary — per track ──────────────────────────
@@ -637,14 +728,14 @@ public partial class RunRemux : Window
             {
                 var t     = allSubs[i];
                 var codec = string.IsNullOrWhiteSpace(t.SubtitleFormat) ? "?" : t.SubtitleFormat;
-                AppendLog($"Subtitle: {t.OriginalTrackIndex}, {codec} → copy");
+                LogLine($"Subtitle: {t.OriginalTrackIndex}, {codec} → copy");
             }
 
             // ── Output path ───────────────────────────────────────────
             if (!string.IsNullOrWhiteSpace(outputPath))
-                AppendLog($"Output:   {outputPath}");
+                LogLine($"Output:   {outputPath}");
 
-            AppendLog("");  // blank line before progress output
+            LogLine("");  // blank line before progress output
         }
         catch
         {
@@ -692,7 +783,9 @@ public partial class RunRemux : Window
     // where other-transcode writes its output .mkv to the current
     // working directory rather than using an explicit --output flag.
     private async Task RunProcessAsync(string exe, string args,
-                                       string? workingDirectory = null)
+                                       string? workingDirectory = null,
+                                       StreamWriter? logWriter = null,
+                                       bool verboseLogging = false)
     {
         var psi = new ProcessStartInfo
         {
@@ -709,20 +802,48 @@ public partial class RunRemux : Window
 
         _currentProcess = new Process { StartInfo = psi };
 
-        // Wire up async output handlers.
-        // These fire on a thread pool thread — we marshal to the UI
-        // thread using Dispatcher.InvokeAsync, which is the correct
-        // WPF approach (replaces the VB.NET InvokeRequired/Invoke pattern).
+        // ── Verbose mode: animated text ticker ───────────────────────
+        // Since all ffmpeg output goes to the log file, the window shows
+        // an animated [----      ] ticker so the user knows work is ongoing.
+        // A CancellationTokenSource lets us stop the ticker when the
+        // process finishes.
+        CancellationTokenSource? tickerCts = null;
+        Task? tickerTask = null;
+
+        if (verboseLogging)
+        {
+            tickerCts  = new CancellationTokenSource();
+            tickerTask = RunTickerAsync(tickerCts.Token);
+        }
+
         _currentProcess.OutputDataReceived += (s, e) =>
         {
-            if (e.Data != null)
-                Dispatcher.InvokeAsync(() => AppendLogLine(e.Data));
+            if (e.Data == null) return;
+            if (verboseLogging)
+                logWriter?.WriteLine(e.Data);
+            else
+                Dispatcher.InvokeAsync(() =>
+                {
+                    AppendLogLine(e.Data);
+                    // Strip progress lines from the log file — they flood it
+                    // with hundreds of near-identical frame= lines.
+                    if (logWriter != null && !IsProgressLine(e.Data.Trim()))
+                        logWriter.WriteLine(e.Data);
+                });
         };
 
         _currentProcess.ErrorDataReceived += (s, e) =>
         {
-            if (e.Data != null)
-                Dispatcher.InvokeAsync(() => AppendLogLine(e.Data));
+            if (e.Data == null) return;
+            if (verboseLogging)
+                logWriter?.WriteLine(e.Data);
+            else
+                Dispatcher.InvokeAsync(() =>
+                {
+                    AppendLogLine(e.Data);
+                    if (logWriter != null && !IsProgressLine(e.Data.Trim()))
+                        logWriter.WriteLine(e.Data);
+                });
         };
 
         try
@@ -731,32 +852,99 @@ public partial class RunRemux : Window
             _currentProcess.BeginOutputReadLine();
             _currentProcess.BeginErrorReadLine();
 
-            // WaitForExitAsync lets the UI stay responsive while the
-            // process runs — no freezing, no DoEvents() hack needed.
             await _currentProcess.WaitForExitAsync();
 
-            // Flush any queued output dispatcher operations before returning,
-            // so all output lines (including the final progress %) land in the
-            // log before the next "--- Processing ---" header is appended.
             await Dispatcher.InvokeAsync(() =>
             {
-                // Ensure the log ends with a newline so the next header
-                // always starts on a fresh line — fixes "99.9%100%" and
-                // "Progress: 100%--- Processing ---" run-together glitches.
-                if (OutputLog.Text.Length > 0 && !OutputLog.Text.EndsWith('\n'))
+                if (!verboseLogging &&
+                    OutputLog.Text.Length > 0 && !OutputLog.Text.EndsWith('\n'))
                     OutputLog.Text += "\n";
             }, System.Windows.Threading.DispatcherPriority.Background);
         }
         catch (Exception ex)
         {
             AppendLog($"Error running process: {ex.Message}");
+            logWriter?.WriteLine($"Error running process: {ex.Message}");
         }
         finally
         {
             _currentProcess.Dispose();
             _currentProcess = null;
+
+            if (tickerCts != null)
+            {
+                tickerCts.Cancel();
+                try { await tickerTask!; } catch { }
+                tickerCts.Dispose();
+                // Clear the ticker line from the window
+                await Dispatcher.InvokeAsync(() => ClearTickerLine());
+            }
         }
     }
+
+    // ── Animated text ticker ──────────────────────────────────────────
+    // Writes a bouncing [----      ] indicator to the output log while
+    // verbose-mode ffmpeg runs. Updates every 120ms on the UI thread.
+    private const int TickerWidth = 12;
+
+    private async Task RunTickerAsync(CancellationToken ct)
+    {
+        int  pos       = 0;
+        int  direction = 1;
+        bool firstTick = true;
+        const int blockLen = 4;
+
+        while (!ct.IsCancellationRequested)
+        {
+            await Task.Delay(120, ct).ContinueWith(_ => { });  // swallow cancellation
+
+            if (ct.IsCancellationRequested) break;
+
+            var bar = new char[TickerWidth];
+            for (int i = 0; i < TickerWidth; i++)
+                bar[i] = (i >= pos && i < pos + blockLen) ? '-' : ' ';
+            var ticker = $"Processing... [{new string(bar)}]  Details in log file";
+
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (firstTick)
+                {
+                    AppendLog(ticker);
+                    firstTick = false;
+                }
+                else
+                {
+                    // Replace the last line in place
+                    var text   = OutputLog.Text;
+                    var lastNl = text.LastIndexOf('\n', text.Length - 2);
+                    OutputLog.Text = lastNl >= 0
+                        ? text.Substring(0, lastNl + 1) + ticker + "\n"
+                        : ticker + "\n";
+                    OutputLog.ScrollToEnd();
+                }
+            });
+
+            pos += direction;
+            if (pos + blockLen >= TickerWidth) direction = -1;
+            if (pos <= 0)                      direction =  1;
+        }
+    }
+
+    // Removes the ticker line when the process finishes, leaving a clean log.
+    private void ClearTickerLine()
+    {
+        var text = OutputLog.Text;
+        if (!text.Contains("Processing... [")) return;
+        var lastNl = text.LastIndexOf('\n', text.Length - 2);
+        OutputLog.Text = lastNl >= 0 ? text.Substring(0, lastNl + 1) : "";
+        OutputLog.ScrollToEnd();
+    }
+
+    // Returns true for lines that should be suppressed in the plain log file.
+    private static bool IsProgressLine(string display) =>
+        display.StartsWith("frame=",    StringComparison.OrdinalIgnoreCase) ||
+        display.StartsWith("Progress:", StringComparison.OrdinalIgnoreCase) ||
+        display.EndsWith("%");
 
     // ── Log helpers ───────────────────────────────────────────────────
 
@@ -897,6 +1085,25 @@ public partial class RunRemux : Window
                 }
             }
             catch { /* Skip unreadable folders */ }
+        }
+    }
+
+    // ── View Log right-click handler ──────────────────────────────────
+    // Opens the session's Logs timestamp folder in Explorer so the user
+    // can browse all log files from this run.
+    private void ViewLogMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        var logFolder = Path.Combine(_outputDirectory, "Logs", _runTimestamp);
+        if (!Directory.Exists(logFolder)) return;
+        try
+        {
+            Process.Start(new ProcessStartInfo("explorer.exe", $"\"{logFolder}\"")
+                { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Could not open log folder:\n{ex.Message}",
+                "View Log", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 

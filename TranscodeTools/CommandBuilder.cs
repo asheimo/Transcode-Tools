@@ -181,7 +181,8 @@ public static class CommandBuilder
         string inputDirectory,
         ObservableCollection<TranscodeVideoTrack> videoTracks,
         ObservableCollection<TranscodeAudioTrack> audioTracks,
-        ObservableCollection<TranscodeSubtitleTrack> subtitleTracks)
+        ObservableCollection<TranscodeSubtitleTrack> subtitleTracks,
+        bool verboseLogging = false)
     {
         // ── Validate audio selection ──────────────────────────────────
         // Block if no audio tracks exist at all (invalid source file)
@@ -211,10 +212,18 @@ public static class CommandBuilder
         var isDoVi = video != null &&
             video.OutputFormat.Equals("copy (DoVi)", StringComparison.OrdinalIgnoreCase);
 
+        // Build the loglevel/stats flags once — used in both paths below.
+        // Verbose mode: use the user-selected log level, no -stats (output
+        // goes to log file; Run window shows progress bar instead).
+        // Normal mode: -loglevel error -stats (current behaviour).
+        var logFlags = verboseLogging
+            ? $"-loglevel {AppSettings.Instance.FfmpegLogLevel}"
+            : "-loglevel error -stats";
+
         if (isDoVi)
         {
             sb.Append($"\"{ffmpegPath}\"");
-            sb.Append(" -y -loglevel error -stats");
+            sb.Append($" -y {logFlags}");
             sb.Append(" -analyzeduration 100M -probesize 100M");
             sb.Append($" -i \"{inputFile}\"");
             sb.Append(" -map 0:v:0 -c:v copy");
@@ -269,8 +278,7 @@ public static class CommandBuilder
         sb.Append($"\"{ffmpegPath}\"");
 
         // -y: overwrite output without prompting — required for unattended batch runs
-        // -loglevel error -stats: suppress informational noise, keep progress line
-        sb.Append(" -y -loglevel error -stats");
+        sb.Append($" -y {logFlags}");
 
         // -analyzeduration / -probesize: increases the amount of data ffmpeg reads
         // before starting. Required for PGS subtitle streams in MKV where the

@@ -47,7 +47,10 @@ public partial class UserPreferences : Window
         bool   TitleCaseEnabled,
         string TitleCaseAcronyms,
         bool   ResolutionAppendEnabled,
-        bool   ResolutionVerifyAlways
+        bool   ResolutionVerifyAlways,
+        bool   WriteLogFiles,
+        bool   VerboseLogging,
+        string FfmpegLogLevel
     );
 
     private readonly SettingsSnapshot _snapshot;
@@ -77,7 +80,10 @@ public partial class UserPreferences : Window
             s.TitleCaseEnabled,
             string.Join(",", s.TitleCaseAcronyms),
             s.ResolutionAppendEnabled,
-            s.ResolutionVerifyAlways
+            s.ResolutionVerifyAlways,
+            s.WriteLogFiles,
+            s.VerboseLogging,
+            s.FfmpegLogLevel
         );
 
         // Load the current saved settings into the text boxes.
@@ -133,6 +139,15 @@ public partial class UserPreferences : Window
         TbxAcronyms.Text                  = string.Join(", ", s.TitleCaseAcronyms);
         ChkResolutionAppend.IsChecked     = s.ResolutionAppendEnabled;
         ChkResolutionVerifyAlways.IsChecked = s.ResolutionVerifyAlways;
+
+        ChkWriteLogFiles.IsChecked   = s.WriteLogFiles;
+        ChkVerboseLogging.IsChecked  = s.VerboseLogging;
+        ChkVerboseLogging.IsEnabled  = s.WriteLogFiles;
+        CbxFfmpegLogLevel.SelectedItem = s.FfmpegLogLevel;
+        CbxFfmpegLogLevel.IsEnabled  = s.WriteLogFiles && s.VerboseLogging;
+        // Fall back to "verbose" if the saved value isn't in the list
+        if (CbxFfmpegLogLevel.SelectedItem == null)
+            CbxFfmpegLogLevel.SelectedIndex = 2;
     }
 
     // Writes all text box values back to AppSettings and saves to disk.
@@ -159,6 +174,10 @@ public partial class UserPreferences : Window
         s.TitleCaseEnabled        = ChkTitleCase.IsChecked == true;
         s.ResolutionAppendEnabled = ChkResolutionAppend.IsChecked == true;
         s.ResolutionVerifyAlways  = ChkResolutionVerifyAlways.IsChecked == true;
+
+        s.WriteLogFiles  = ChkWriteLogFiles.IsChecked == true;
+        s.VerboseLogging = ChkVerboseLogging.IsChecked == true;
+        s.FfmpegLogLevel = CbxFfmpegLogLevel.SelectedItem as string ?? "verbose";
 
         // Parse acronym list — split on commas, trim whitespace, remove empties
         s.TitleCaseAcronyms = TbxAcronyms.Text
@@ -224,6 +243,9 @@ public partial class UserPreferences : Window
             .Split(',').Select(a => a.Trim()).Where(a => !string.IsNullOrEmpty(a)).ToList();
         s.ResolutionAppendEnabled    = _snapshot.ResolutionAppendEnabled;
         s.ResolutionVerifyAlways     = _snapshot.ResolutionVerifyAlways;
+        s.WriteLogFiles              = _snapshot.WriteLogFiles;
+        s.VerboseLogging             = _snapshot.VerboseLogging;
+        s.FfmpegLogLevel             = _snapshot.FfmpegLogLevel;
 
         DialogResult = false;
         Close();
@@ -276,6 +298,29 @@ public partial class UserPreferences : Window
 
     private void BrowseMKVMerge_Click(object sender, RoutedEventArgs e)
         => TbxMKVMerge.Text = BrowseForExe() ?? TbxMKVMerge.Text;
+
+    // ── Run section enable/disable chain ─────────────────────────────
+    // Write Log Files controls whether Verbose Logging is enabled.
+    // Verbose Logging controls whether the log level dropdown is enabled.
+
+    private void ChkWriteLogFiles_Changed(object sender, RoutedEventArgs e)
+    {
+        var writeOn = ChkWriteLogFiles.IsChecked == true;
+        ChkVerboseLogging.IsEnabled  = writeOn;
+        if (!writeOn)
+        {
+            ChkVerboseLogging.IsChecked = false;
+            CbxFfmpegLogLevel.IsEnabled = false;
+        }
+    }
+
+    private void ChkVerboseLogging_Changed(object sender, RoutedEventArgs e)
+    {
+        var verboseOn = ChkVerboseLogging.IsChecked == true;
+        CbxFfmpegLogLevel.IsEnabled = verboseOn;
+        if (!verboseOn)
+            CbxFfmpegLogLevel.SelectedItem = "verbose";
+    }
 
     // ── Input validation ─────────────────────────────────────────────
     // Prevents non-numeric characters being typed into the History Size box.

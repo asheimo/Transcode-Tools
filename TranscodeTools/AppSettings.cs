@@ -100,6 +100,19 @@ public sealed class AppSettings
     public bool ResolutionAppendEnabled  { get; set; } = true;
     public bool ResolutionVerifyAlways   { get; set; } = false;
 
+    // ── Run / Log settings ───────────────────────────────────────────
+    // WriteLogFiles: when true, a log file is written per processed file
+    // to <OutputDirectory>\Logs\<timestamp>\<FolderPath>\<Name>.log.
+    // VerboseLogging: only active when WriteLogFiles is on. When true,
+    // ffmpeg runs at FfmpegLogLevel (without -stats) and all output goes
+    // to the log file; the Run window shows an indeterminate progress bar.
+    // When false, ffmpeg runs with -loglevel error -stats as normal and
+    // the log file captures the same output shown in the window.
+    // FfmpegLogLevel: the -loglevel value used when VerboseLogging is on.
+    public bool   WriteLogFiles   { get; set; } = false;
+    public bool   VerboseLogging  { get; set; } = false;
+    public string FfmpegLogLevel  { get; set; } = "verbose";
+
     // ── Recent folder history ────────────────────────────────────────
     // Stores the most recently used input and output folder paths so the
     // user can quickly reload them from a dropdown without browsing again.
