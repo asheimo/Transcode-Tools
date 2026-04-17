@@ -14,6 +14,7 @@
 // ============================================================
 
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
@@ -35,6 +36,40 @@ public partial class RunRemux : Window
     private Process?         _currentProcess;
     private bool             _cancelRequested;
     private bool             _isRunning;
+
+    // Tracks which folder names had at least one file fail during a run.
+    // Populated by ProcessFileAsync; read by the move worker.
+    // Cleared at the start of each run so stale errors don't carry over.
+    private readonly HashSet<string> _foldersWithErrors = new(StringComparer.OrdinalIgnoreCase);
+
+    // ── Parallel move infrastructure ──────────────────────────────────
+    // As each top-level folder's files all finish successfully, its name
+    // is enqueued here and the move worker picks it up immediately —
+    // moves run in parallel with ongoing processing of other folders.
+    //
+    // ConcurrentQueue is thread-safe for simultaneous enqueue (processing
+    // loop) and dequeue (move worker) without needing a lock.
+    private readonly System.Collections.Concurrent.ConcurrentQueue<string> _moveQueue = new();
+
+    // The long-lived move worker task, started at the same time as the
+    // processing loop and awaited after it finishes.
+    private Task? _moveWorkerTask;
+
+    // Signals the move worker that no more folders will be enqueued
+    // (either the run completed normally or was cancelled).
+    // The worker drains any remaining queue entries before exiting.
+    private volatile bool _processingComplete;
+
+    // Per-folder file counts — built before the loop starts.
+    // _folderFileTotal: how many files were queued for each top-level folder.
+    // _folderFileDone:  incremented after each ProcessFileAsync completes.
+    // When Done == Total the folder is either queued for move or marked failed.
+    private readonly Dictionary<string, int> _folderFileTotal = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, int> _folderFileDone  = new(StringComparer.OrdinalIgnoreCase);
+
+    // Maps top-level folder name → RunFolderNode so the move worker can
+    // retrieve the TreeItem reference for colour updates. Built at run start.
+    private readonly Dictionary<string, RunFolderNode> _folderNodes = new(StringComparer.OrdinalIgnoreCase);
 
     // ── Log file state ────────────────────────────────────────────────
     // Timestamp folder created once per run — shared across all files.
@@ -62,7 +97,15 @@ public partial class RunRemux : Window
 
         // Update window title to match mode
         Title = isTranscodeMode ? "Run Transcode" : "Run Remux";
+
+        // Raise RunCompleted when the window closes so MainWindow can
+        // refresh its folder tree to reflect any moves that took place.
+        Closed += (_, _) => RunCompleted?.Invoke(this, EventArgs.Empty);
     }
+
+    // Raised when the Run window closes. MainWindow subscribes to this
+    // to trigger a folder tree refresh after a run.
+    public event EventHandler? RunCompleted;
 
     // ── Window loaded ─────────────────────────────────────────────────
     private void RunRemux_Loaded(object sender, RoutedEventArgs e)
@@ -94,7 +137,8 @@ public partial class RunRemux : Window
                 .Where(name => name != null &&
                                !name.Equals("Remux",     StringComparison.OrdinalIgnoreCase) &&
                                !name.Equals("Transcode", StringComparison.OrdinalIgnoreCase) &&
-                               !name.Equals("Logs",      StringComparison.OrdinalIgnoreCase))
+                               !name.Equals("Logs",      StringComparison.OrdinalIgnoreCase) &&
+                               !name.Equals("Completed", StringComparison.OrdinalIgnoreCase))
                 .OrderBy(name => name);
 
             foreach (var folderName in folders)
@@ -171,6 +215,10 @@ public partial class RunRemux : Window
             Header = checkBox,
             Tag    = node
         };
+
+        // Store the TreeViewItem on the node so the move worker can colour it
+        // directly via Dispatcher without having to search the visual tree.
+        node.TreeItem = treeItem;
 
         if (!showFiles) return treeItem;
 
@@ -350,6 +398,7 @@ public partial class RunRemux : Window
     }
 
     // ── Start button ──────────────────────────────────────────────────
+    // ── Start button ──────────────────────────────────────────────────
     private async void StartBtn_Click(object sender, RoutedEventArgs e)
     {
         if (_isRunning) return;
@@ -363,8 +412,9 @@ public partial class RunRemux : Window
         }
 
         // Switch to running state
-        _isRunning       = true;
-        _cancelRequested = false;
+        _isRunning          = true;
+        _cancelRequested    = false;
+        _processingComplete = false;
         StartBtn.IsEnabled      = false;
         CancelCloseBtn.Content  = "Cancel";
         ShowFilesCheckBox.IsEnabled = false;
@@ -373,7 +423,34 @@ public partial class RunRemux : Window
         // Create a single timestamp folder for this entire run
         _runTimestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
         _lastRunLogPaths.Clear();
-        ViewLogMenuItem.IsEnabled  = false;
+        ViewLogMenuItem.IsEnabled = false;
+        _foldersWithErrors.Clear();
+        _moveWorkerTask = null;
+
+        // ── Build per-folder file counts and node map ─────────────────
+        // We need to know when every file in a folder is done so we can
+        // immediately queue that folder for moving — without waiting for
+        // the entire run to finish.
+        _folderFileTotal.Clear();
+        _folderFileDone.Clear();
+        _folderNodes.Clear();
+
+        foreach (var file in filesToProcess)
+        {
+            var top = file.FolderName.Split('\\')[0];
+            _folderFileTotal[top] = _folderFileTotal.TryGetValue(top, out var n) ? n + 1 : 1;
+            _folderFileDone[top]  = 0;
+        }
+
+        // Walk the live tree to populate _folderNodes with TreeItem references.
+        BuildFolderNodeMap();
+
+        // ── Start the move worker alongside the processing loop ───────
+        // The worker runs independently, draining _moveQueue as folders
+        // complete. It exits only when _processingComplete is set AND
+        // the queue is empty.
+        if (!AppSettings.Instance.DisableMoveCompleted)
+            _moveWorkerTask = RunMoveWorkerAsync();
 
         foreach (var file in filesToProcess)
         {
@@ -388,19 +465,169 @@ public partial class RunRemux : Window
 
             if (_cancelRequested)
             {
-                AppendLog("Job cancelled.");
+                AppendLog("Job cancelled. Waiting for folder moves to complete\u2026");
                 break;
+            }
+
+            // ── Check if this folder is now fully processed ───────────
+            // If all files for this top-level folder are done and none had
+            // errors, enqueue it for moving immediately.
+            if (!AppSettings.Instance.DisableMoveCompleted)
+            {
+                var top = file.FolderName.Split('\\')[0];
+                _folderFileDone[top] = (_folderFileDone.TryGetValue(top, out var done) ? done : 0) + 1;
+
+                var allDone   = _folderFileDone[top] >= _folderFileTotal[top];
+                var hasErrors = _foldersWithErrors.Any(err =>
+                    err.Equals(top, StringComparison.OrdinalIgnoreCase) ||
+                    err.StartsWith(top + "\\", StringComparison.OrdinalIgnoreCase));
+
+                if (allDone && !hasErrors)
+                    _moveQueue.Enqueue(top);
             }
         }
 
         if (!_cancelRequested)
             AppendLog("--- Complete ---");
 
+        // Signal the worker that no more folders will arrive, then wait for
+        // it to drain whatever is still in the queue before restoring UI.
+        _processingComplete = true;
+
+        if (_moveWorkerTask != null)
+        {
+            CancelCloseBtn.Content   = "Please wait\u2026";
+            CancelCloseBtn.IsEnabled = false;
+            await _moveWorkerTask;
+        }
+
         // Restore UI state
         _isRunning                  = false;
         StartBtn.IsEnabled          = true;
         CancelCloseBtn.Content      = "Close";
+        CancelCloseBtn.IsEnabled    = true;
         ShowFilesCheckBox.IsEnabled = true;
+    }
+
+    // ── Build folder node map ─────────────────────────────────────────
+    // Walks the live TreeView and populates _folderNodes with the
+    // RunFolderNode (which holds a TreeItem reference) for every
+    // selectable node, keyed on its top-level folder name.
+    private void BuildFolderNodeMap()
+    {
+        foreach (TreeViewItem topItem in FolderTree.Items)
+        {
+            if (topItem.Tag is RunFolderNode movieNode)
+            {
+                // Movie — top item is directly selectable
+                var top = movieNode.FolderName.Split('\\')[0];
+                _folderNodes[top] = movieNode;
+            }
+            else
+            {
+                // TV show — season children are the selectable nodes.
+                // We want the show's top-level folder, which is the
+                // show item itself (plain TextBlock header, no Tag).
+                // Use the first season's FolderName to extract it.
+                foreach (TreeViewItem seasonItem in topItem.Items)
+                {
+                    if (seasonItem.Tag is RunFolderNode seasonNode)
+                    {
+                        var top = seasonNode.FolderName.Split('\\')[0];
+                        if (!_folderNodes.ContainsKey(top))
+                        {
+                            // For TV shows we colour the show-level TreeViewItem
+                            // (the non-selectable header row) rather than the
+                            // individual season rows, so the whole show lights up.
+                            _folderNodes[top] = new RunFolderNode
+                            {
+                                FolderName = top,
+                                TreeItem   = topItem
+                            };
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Move worker ───────────────────────────────────────────────────
+    // Runs alongside the processing loop. Drains _moveQueue as folders
+    // complete successfully. Exits when _processingComplete is true and
+    // the queue is empty. Colours the TreeViewItem amber → green/red.
+    private async Task RunMoveWorkerAsync()
+    {
+        var completedRoot = Path.Combine(_inputDirectory, "Completed");
+        // Minimum amber visibility — even an instant Directory.Move gets
+        // a brief flash so the user sees the state change.
+        const int AmberMinMs = 300;
+
+        while (!_processingComplete || !_moveQueue.IsEmpty)
+        {
+            if (_moveQueue.TryDequeue(out var folder))
+            {
+                var source = Path.Combine(_inputDirectory, folder);
+                var dest   = Path.Combine(completedRoot, folder);
+
+                // ── Amber: move in progress ───────────────────────────
+                await SetFolderColourAsync(folder, "#FFE08A");
+
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+
+                bool success = false;
+                try
+                {
+                    if (!Directory.Exists(source))
+                    {
+                        AppendLog($"  Move skipped (not found): {folder}");
+                    }
+                    else if (Directory.Exists(dest))
+                    {
+                        AppendLog($"  Move skipped (destination exists): {folder}");
+                    }
+                    else
+                    {
+                        Directory.CreateDirectory(completedRoot);
+                        Directory.Move(source, dest);
+                        AppendLog($"  Moved: {folder}");
+                        success = true;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    AppendLog($"  Error moving {folder}: {ex.Message}");
+                }
+
+                // Hold amber for at least AmberMinMs so it's always visible
+                var elapsed = (int)sw.ElapsedMilliseconds;
+                if (elapsed < AmberMinMs)
+                    await Task.Delay(AmberMinMs - elapsed);
+
+                // ── Green on success, red on failure ──────────────────
+                await SetFolderColourAsync(folder, success ? "#4CAF50" : "#E53935");
+            }
+            else
+            {
+                // Queue empty but processing still running — yield briefly
+                // rather than spinning at 100% CPU.
+                await Task.Delay(100);
+            }
+        }
+    }
+
+    // Sets the Background of the TreeViewItem for the given top-level folder.
+    // Must be called from any thread — marshals to the UI dispatcher internally.
+    private Task SetFolderColourAsync(string topFolder, string hex)
+    {
+        return Dispatcher.InvokeAsync(() =>
+        {
+            if (_folderNodes.TryGetValue(topFolder, out var node) &&
+                node.TreeItem != null)
+            {
+                node.TreeItem.Background = new SolidColorBrush(
+                    (Color)ColorConverter.ConvertFromString(hex));
+            }
+        }).Task;
     }
 
     // ── Cancel / Close button ─────────────────────────────────────────
@@ -408,8 +635,12 @@ public partial class RunRemux : Window
     {
         if (_isRunning)
         {
-            // Cancel — kill the running process
-            _cancelRequested = true;
+            // Cancel — kill the running process and disable the button.
+            // StartBtn_Click will re-enable it as "Close" once the move
+            // worker has drained the queue.
+            _cancelRequested         = true;
+            CancelCloseBtn.Content   = "Please wait\u2026";
+            CancelCloseBtn.IsEnabled = false;
             try
             {
                 // Kill mkvmerge, ffmpeg, or robocopy if running
@@ -516,8 +747,10 @@ public partial class RunRemux : Window
                     }
 
                     await LogTranscodeSummaryAsync(command, logWriter);
-                    await RunProcessAsync(exe, args, logWriter: logWriter,
+                    int exitCode1 = await RunProcessAsync(exe, args, logWriter: logWriter,
                                           verboseLogging: verboseLogging);
+                    if (exitCode1 != 0)
+                        _foldersWithErrors.Add(file.FolderName);
                 }
                 else
                 {
@@ -534,8 +767,10 @@ public partial class RunRemux : Window
                         args = firstSpace > 0 ? command.Substring(firstSpace + 1).Trim() : "";
                     }
 
-                    await RunProcessAsync(exe, args, logWriter: logWriter,
+                    int exitCode2 = await RunProcessAsync(exe, args, logWriter: logWriter,
                                           verboseLogging: false);
+                    if (exitCode2 != 0)
+                        _foldersWithErrors.Add(file.FolderName);
                 }
             }
             else if (_isTranscodeMode)
@@ -572,13 +807,16 @@ public partial class RunRemux : Window
                         ? command.Substring(command.IndexOf('"', 1) + 1).Trim()
                         : command.Substring(command.IndexOf(' ') + 1).Trim();
 
-                    await RunProcessAsync(exe, args, logWriter: logWriter,
+                    int exitCode3 = await RunProcessAsync(exe, args, logWriter: logWriter,
                                           verboseLogging: verboseLogging);
+                    if (exitCode3 != 0)
+                        _foldersWithErrors.Add(file.FolderName);
                 }
                 catch (Exception ex)
                 {
                     AppendLog($"  Error building command: {ex.Message}");
                     logWriter?.WriteLine($"Error building command: {ex.Message}");
+                    _foldersWithErrors.Add(file.FolderName);
                 }
             }
             else
@@ -595,8 +833,13 @@ public partial class RunRemux : Window
                 logWriter?.WriteLine();
 
                 Directory.CreateDirectory(destFolder);
-                await RunProcessAsync("robocopy", robocopyArgs, logWriter: logWriter,
+                int exitCode4 = await RunProcessAsync("robocopy", robocopyArgs, logWriter: logWriter,
                                       verboseLogging: false);
+                // Robocopy uses a bitmask exit code — values 0–7 are all success
+                // (bits indicate files copied/skipped/extras, not errors).
+                // Exit code 8 or higher signals at least one failure.
+                if (exitCode4 > 7)
+                    _foldersWithErrors.Add(file.FolderName);
             }
         }
         finally
@@ -782,11 +1025,12 @@ public partial class RunRemux : Window
     // workingDirectory is optional — only needed for Transcode mode,
     // where other-transcode writes its output .mkv to the current
     // working directory rather than using an explicit --output flag.
-    private async Task RunProcessAsync(string exe, string args,
-                                       string? workingDirectory = null,
-                                       StreamWriter? logWriter = null,
-                                       bool verboseLogging = false)
+    private async Task<int> RunProcessAsync(string exe, string args,
+                                            string? workingDirectory = null,
+                                            StreamWriter? logWriter = null,
+                                            bool verboseLogging = false)
     {
+        int exitCode = -1;
         var psi = new ProcessStartInfo
         {
             FileName               = exe,
@@ -853,6 +1097,7 @@ public partial class RunRemux : Window
             _currentProcess.BeginErrorReadLine();
 
             await _currentProcess.WaitForExitAsync();
+            exitCode = _currentProcess.ExitCode;
 
             await Dispatcher.InvokeAsync(() =>
             {
@@ -880,6 +1125,8 @@ public partial class RunRemux : Window
                 await Dispatcher.InvokeAsync(() => ClearTickerLine());
             }
         }
+
+        return exitCode;
     }
 
     // ── Animated text ticker ──────────────────────────────────────────
@@ -1125,6 +1372,10 @@ public partial class RunRemux : Window
 public class RunFolderNode
 {
     public string FolderName { get; set; } = "";
+
+    // Stored at tree-build time so the move worker can update the node's
+    // background colour from a Dispatcher call without searching the tree.
+    public TreeViewItem? TreeItem { get; set; }
 }
 
 // Represents an individual .mkv file

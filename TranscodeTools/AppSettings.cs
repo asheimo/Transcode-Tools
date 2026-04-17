@@ -113,6 +113,14 @@ public sealed class AppSettings
     public bool   VerboseLogging  { get; set; } = false;
     public string FfmpegLogLevel  { get; set; } = "verbose";
 
+    // ── Auto-move completed folders ──────────────────────────────────
+    // When false (default), each output folder whose files all completed
+    // without errors is moved to <OutputDirectory>\Completed\<FolderName>
+    // at the end of a run. Set to true to disable this behaviour.
+    // Uses Directory.Move — fast but requires source and destination to be
+    // on the same drive.
+    public bool DisableMoveCompleted { get; set; } = false;
+
     // ── Recent folder history ────────────────────────────────────────
     // Stores the most recently used input and output folder paths so the
     // user can quickly reload them from a dropdown without browsing again.

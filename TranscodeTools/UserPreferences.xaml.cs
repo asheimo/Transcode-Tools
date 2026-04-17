@@ -50,7 +50,8 @@ public partial class UserPreferences : Window
         bool   ResolutionVerifyAlways,
         bool   WriteLogFiles,
         bool   VerboseLogging,
-        string FfmpegLogLevel
+        string FfmpegLogLevel,
+        bool   DisableMoveCompleted
     );
 
     private readonly SettingsSnapshot _snapshot;
@@ -83,7 +84,8 @@ public partial class UserPreferences : Window
             s.ResolutionVerifyAlways,
             s.WriteLogFiles,
             s.VerboseLogging,
-            s.FfmpegLogLevel
+            s.FfmpegLogLevel,
+            s.DisableMoveCompleted
         );
 
         // Load the current saved settings into the text boxes.
@@ -148,6 +150,8 @@ public partial class UserPreferences : Window
         // Fall back to "verbose" if the saved value isn't in the list
         if (CbxFfmpegLogLevel.SelectedItem == null)
             CbxFfmpegLogLevel.SelectedIndex = 2;
+
+        ChkAutoMoveCompleted.IsChecked = s.DisableMoveCompleted;
     }
 
     // Writes all text box values back to AppSettings and saves to disk.
@@ -178,6 +182,7 @@ public partial class UserPreferences : Window
         s.WriteLogFiles  = ChkWriteLogFiles.IsChecked == true;
         s.VerboseLogging = ChkVerboseLogging.IsChecked == true;
         s.FfmpegLogLevel = CbxFfmpegLogLevel.SelectedItem as string ?? "verbose";
+        s.DisableMoveCompleted = ChkAutoMoveCompleted.IsChecked == true;
 
         // Parse acronym list — split on commas, trim whitespace, remove empties
         s.TitleCaseAcronyms = TbxAcronyms.Text
@@ -246,6 +251,7 @@ public partial class UserPreferences : Window
         s.WriteLogFiles              = _snapshot.WriteLogFiles;
         s.VerboseLogging             = _snapshot.VerboseLogging;
         s.FfmpegLogLevel             = _snapshot.FfmpegLogLevel;
+        s.DisableMoveCompleted          = _snapshot.DisableMoveCompleted;
 
         DialogResult = false;
         Close();
@@ -321,6 +327,9 @@ public partial class UserPreferences : Window
         if (!verboseOn)
             CbxFfmpegLogLevel.SelectedItem = "verbose";
     }
+
+    private void ChkAutoMoveCompleted_Changed(object sender, RoutedEventArgs e)
+        => SaveSettings();
 
     // ── Input validation ─────────────────────────────────────────────
     // Prevents non-numeric characters being typed into the History Size box.

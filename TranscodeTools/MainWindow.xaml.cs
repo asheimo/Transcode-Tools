@@ -247,7 +247,9 @@ public partial class MainWindow : Window
                 .Select(Path.GetFileName)
                 .Where(name => name != null &&
                                !name.Equals("Remux",     StringComparison.OrdinalIgnoreCase) &&
-                               !name.Equals("Transcode", StringComparison.OrdinalIgnoreCase))
+                               !name.Equals("Transcode", StringComparison.OrdinalIgnoreCase) &&
+                               !name.Equals("Logs",      StringComparison.OrdinalIgnoreCase) &&
+                               !name.Equals("Completed", StringComparison.OrdinalIgnoreCase))
                 .OrderBy(name => name);
 
             foreach (var folderName in folders)
@@ -2296,6 +2298,15 @@ public partial class MainWindow : Window
 
         var runWindow = new RunRemux(_inputDirectory, OutputDirectoryBox.Text, _isTranscodeMode);
         runWindow.Owner = this;
+
+        // When the Run window closes, refresh the main folder tree so any
+        // folders that were moved to Completed\ are no longer shown.
+        runWindow.RunCompleted += (_, _) =>
+        {
+            if (!string.IsNullOrWhiteSpace(_inputDirectory))
+                LoadMovieFolders(_inputDirectory);
+        };
+
         runWindow.ShowDialog();
     }
 

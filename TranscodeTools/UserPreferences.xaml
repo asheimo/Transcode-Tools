@@ -347,6 +347,19 @@
                             </ComboBox>
                         </StackPanel>
 
+                        <!-- Disable automatic move of completed folders -->
+                        <CheckBox x:Name="ChkAutoMoveCompleted"
+                                  Content="Disable automatic move of completed folders"
+                                  HorizontalAlignment="Left"
+                                  Margin="0,8,0,4"
+                                  Checked="ChkAutoMoveCompleted_Changed"
+                                  Unchecked="ChkAutoMoveCompleted_Changed"/>
+                        <TextBlock Text="When checked, completed output folders will not be automatically moved to a Completed\ subfolder after a run. By default, folders whose files all succeeded are moved automatically."
+                                   Foreground="{DynamicResource SubtleForeground}"
+                                   FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Margin="22,0,0,8"/>
+
                     </StackPanel>
                 </Border>
 
