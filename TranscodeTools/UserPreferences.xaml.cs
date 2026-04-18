@@ -4,32 +4,32 @@
 // Code-behind for the User Preferences window.
 // Handles loading settings into the form, saving them back,
 // and the Where/Browse button logic for each tool path.
+//
+// Encode tab notes:
+//   CbxGpuVendor selection shows/hides PnlNvidia or PnlIntel.
+//   Each panel has its own preset ComboBox:
+//     CbxDefaultPreset    — NVIDIA (p1–p7 / None)
+//     CbxQsvDefaultPreset — Intel  (veryfast–veryslow)
+//   Only the active panel's combo is read/written at save time.
+//   AppSettings.DefaultPreset stores a single string; we just
+//   save whichever vendor is currently selected.
 // ============================================================
 
-using System.Diagnostics;  // For Process (running "where" command)
+using System.Diagnostics;
 using System.Windows;
-using System.Windows.Controls;  // For TextBox
-using System.Windows.Input;     // For KeyboardFocusChangedEventArgs
-using System.Text.RegularExpressions; // For numeric-only input validation
-using Microsoft.Win32;          // For OpenFileDialog
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Text.RegularExpressions;
+using Microsoft.Win32;
 
 namespace TranscodeTools;
 
 public partial class UserPreferences : Window
 {
     // ── Snapshot for Cancel ──────────────────────────────────────────
-    // We take a copy of all settings when the window opens.
-    // If the user clicks Cancel, we restore this snapshot so that any
-    // changes they made in the text boxes are thrown away.
-    //
-    // Without this, editing a path and then clicking Cancel would leave
-    // AppSettings.Instance with the half-edited value even though nothing
-    // was saved to disk — because the text boxes write directly to the
-    // instance when SaveSettings() is called, but Cancel never called
-    // SaveSettings() so the in-memory object still held the dirty value.
-    //
-    // A record is a perfect fit here — it's an immutable snapshot.
-    // We create it once at open time and never change it.
+    // Immutable copy of all settings captured when the window opens.
+    // Cancel restores from this rather than from disk, so in-memory
+    // state is always consistent with what the user actually saved.
     private record SettingsSnapshot(
         string MPV_Path,
         string SubtitleEdit_Path,
@@ -41,11 +41,13 @@ public partial class UserPreferences : Window
         string MKVMerge_Options,
         string RoboCopy_Defaults,
         bool   AlwaysConvertToHevc,
+        string GpuVendor,
         string DefaultPreset,
         string NvencQualityFlags,
+        string QsvQualityFlags,
         int    RecentFolderHistorySize,
-        bool   TitleCaseEnabled,
         string TitleCaseAcronyms,
+        bool   TitleCaseEnabled,
         bool   ResolutionAppendEnabled,
         bool   ResolutionVerifyAlways,
         bool   WriteLogFiles,
@@ -61,8 +63,8 @@ public partial class UserPreferences : Window
     {
         InitializeComponent();
 
-        // Take the snapshot BEFORE loading settings into the text boxes,
-        // so we capture the values exactly as they were when the window opened.
+        // Capture snapshot BEFORE LoadSettings() — snapshot must reflect
+        // the on-disk state, not any default the UI might substitute.
         var s = AppSettings.Instance;
         _snapshot = new SettingsSnapshot(
             s.MPV_Path,
@@ -75,11 +77,13 @@ public partial class UserPreferences : Window
             s.MKVMerge_Options,
             s.RoboCopy_Defaults,
             s.AlwaysConvertToHevc,
+            s.GpuVendor,
             s.DefaultPreset,
             s.NvencQualityFlags,
+            s.QsvQualityFlags,
             s.RecentFolderHistorySize,
-            s.TitleCaseEnabled,
             string.Join(",", s.TitleCaseAcronyms),
+            s.TitleCaseEnabled,
             s.ResolutionAppendEnabled,
             s.ResolutionVerifyAlways,
             s.WriteLogFiles,
@@ -88,110 +92,130 @@ public partial class UserPreferences : Window
             s.DisableMoveCompleted
         );
 
-        // Load the current saved settings into the text boxes.
         LoadSettings();
     }
 
-    // ── TextBox click-to-select-all ──────────────────────────────────
-    // This handler fires whenever any control inside the window receives
-    // keyboard focus — including when the user clicks a TextBox.
-    //
-    // We check if the focused element is a TextBox, and if so call
-    // SelectAll() to highlight its entire contents.
-    //
-    // Because this is on the Window rather than each individual TextBox,
-    // one handler covers every path box automatically — no need to wire
-    // up the same event thirteen times.
-    //
-    // GotKeyboardFocus rather than GotFocus is used because it fires
-    // reliably for both mouse clicks and Tab key navigation.
-    // In VB.NET WinForms the equivalent was handling the Enter event
-    // on each TextBox individually and calling SelectAll() there.
+    // ── Click-to-select-all ──────────────────────────────────────────
+    // Fires on every keyboard-focus change within the window.
+    // If a TextBox gained focus, select its entire contents.
+    // One handler on the Window covers all text boxes automatically.
     private void Window_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
     {
-        // e.NewFocus is the element that just received focus.
-        // "is TextBox tb" pattern-matches and assigns it to tb in one step.
         if (e.NewFocus is TextBox tb)
             tb.SelectAll();
     }
 
-    // Reads from AppSettings.Instance and populates all text boxes.
-    // AppSettings.Instance is our singleton — the one shared settings
-    // object for the whole application.
+    // ── LoadSettings ─────────────────────────────────────────────────
+    // Reads AppSettings.Instance and populates every control.
     private void LoadSettings()
     {
-        // Shorthand variable so we don't have to type AppSettings.Instance
-        // every single line. "var" infers the type as AppSettings.
         var s = AppSettings.Instance;
 
-        TbxMPV.Text                   = s.MPV_Path;
-        TbxSubtitleEdit.Text          = s.SubtitleEdit_Path;
-        TbxFFmpeg.Text                = s.FFmpeg_Path;
-        TbxFFprobe.Text               = s.FFprobe_Path;
-        TbxMKVPropEdit.Text           = s.MKVPropEdit_Path;
-        TbxMKVMerge.Text              = s.MKVMerge_Path;
-        TbxMKVMergeDefaults.Text      = s.MKVMerge_Defaults;
-        TbxMKVMergeOptions.Text       = s.MKVMerge_Options;
-        TbxRoboCopyDefaults.Text      = s.RoboCopy_Defaults;
-        ChkAlwaysConvertToHevc.IsChecked  = s.AlwaysConvertToHevc;
-        CbxDefaultPreset.SelectedItem     = s.DefaultPreset;
-        TbxNvencQualityFlags.Text         = s.NvencQualityFlags;
-        TbxHistorySize.Text               = s.RecentFolderHistorySize.ToString();
-        ChkTitleCase.IsChecked            = s.TitleCaseEnabled;
-        TbxAcronyms.Text                  = string.Join(", ", s.TitleCaseAcronyms);
-        ChkResolutionAppend.IsChecked     = s.ResolutionAppendEnabled;
+        // Tool Paths tab
+        TbxMPV.Text            = s.MPV_Path;
+        TbxSubtitleEdit.Text   = s.SubtitleEdit_Path;
+        TbxFFmpeg.Text         = s.FFmpeg_Path;
+        TbxFFprobe.Text        = s.FFprobe_Path;
+        TbxMKVPropEdit.Text    = s.MKVPropEdit_Path;
+        TbxMKVMerge.Text       = s.MKVMerge_Path;
+
+        // Encode tab — vendor selector (triggers panel swap via SelectionChanged)
+        CbxGpuVendor.SelectedItem = s.GpuVendor;
+        if (CbxGpuVendor.SelectedItem == null) CbxGpuVendor.SelectedIndex = 0;
+
+        // Load the saved preset into the correct vendor combo.
+        // The other combo keeps its XAML default — the user only interacts
+        // with one at a time, and SaveSettings only reads the active one.
+        var isIntel = s.GpuVendor.Equals("Intel", StringComparison.OrdinalIgnoreCase);
+        if (isIntel)
+        {
+            CbxQsvDefaultPreset.SelectedItem = s.DefaultPreset;
+            if (CbxQsvDefaultPreset.SelectedItem == null) CbxQsvDefaultPreset.SelectedIndex = 3; // medium
+        }
+        else
+        {
+            CbxDefaultPreset.SelectedItem = s.DefaultPreset;
+            if (CbxDefaultPreset.SelectedItem == null) CbxDefaultPreset.SelectedIndex = 5; // p5
+        }
+
+        TbxNvencQualityFlags.Text      = s.NvencQualityFlags;
+        TbxQsvQualityFlags.Text        = s.QsvQualityFlags;
+        ChkAlwaysConvertToHevc.IsChecked = s.AlwaysConvertToHevc;
+
+        // Remux tab
+        TbxMKVMergeDefaults.Text = s.MKVMerge_Defaults;
+        TbxMKVMergeOptions.Text  = s.MKVMerge_Options;
+        TbxRoboCopyDefaults.Text = s.RoboCopy_Defaults;
+
+        // File Names tab
+        ChkTitleCase.IsChecked              = s.TitleCaseEnabled;
+        TbxAcronyms.Text                    = string.Join(", ", s.TitleCaseAcronyms);
+        ChkResolutionAppend.IsChecked       = s.ResolutionAppendEnabled;
         ChkResolutionVerifyAlways.IsChecked = s.ResolutionVerifyAlways;
 
+        // Run tab
         ChkWriteLogFiles.IsChecked   = s.WriteLogFiles;
         ChkVerboseLogging.IsChecked  = s.VerboseLogging;
         ChkVerboseLogging.IsEnabled  = s.WriteLogFiles;
         CbxFfmpegLogLevel.SelectedItem = s.FfmpegLogLevel;
+        if (CbxFfmpegLogLevel.SelectedItem == null) CbxFfmpegLogLevel.SelectedIndex = 2; // verbose
         CbxFfmpegLogLevel.IsEnabled  = s.WriteLogFiles && s.VerboseLogging;
-        // Fall back to "verbose" if the saved value isn't in the list
-        if (CbxFfmpegLogLevel.SelectedItem == null)
-            CbxFfmpegLogLevel.SelectedIndex = 2;
-
         ChkAutoMoveCompleted.IsChecked = s.DisableMoveCompleted;
+        TbxHistorySize.Text            = s.RecentFolderHistorySize.ToString();
     }
 
-    // Writes all text box values back to AppSettings and saves to disk.
+    // ── SaveSettings ─────────────────────────────────────────────────
+    // Writes all control values back to AppSettings and persists to disk.
     private void SaveSettings()
     {
         var s = AppSettings.Instance;
 
-        s.MPV_Path                = TbxMPV.Text;
-        s.SubtitleEdit_Path       = TbxSubtitleEdit.Text;
-        s.FFmpeg_Path             = TbxFFmpeg.Text;
-        s.FFprobe_Path            = TbxFFprobe.Text;
-        s.MKVPropEdit_Path        = TbxMKVPropEdit.Text;
-        s.MKVMerge_Path           = TbxMKVMerge.Text;
-        s.MKVMerge_Defaults       = TbxMKVMergeDefaults.Text;
-        s.MKVMerge_Options        = TbxMKVMergeOptions.Text;
-        s.RoboCopy_Defaults       = TbxRoboCopyDefaults.Text;
-        s.AlwaysConvertToHevc     = ChkAlwaysConvertToHevc.IsChecked == true;
-        s.DefaultPreset           = CbxDefaultPreset.SelectedItem as string ?? "p5";
-        s.NvencQualityFlags       = TbxNvencQualityFlags.Text;
-        // Parse history size — fall back to current value if the box is empty or invalid
-        if (int.TryParse(TbxHistorySize.Text, out var histSize) && histSize > 0)
-            s.RecentFolderHistorySize = histSize;
+        // Tool Paths
+        s.MPV_Path          = TbxMPV.Text;
+        s.SubtitleEdit_Path = TbxSubtitleEdit.Text;
+        s.FFmpeg_Path       = TbxFFmpeg.Text;
+        s.FFprobe_Path      = TbxFFprobe.Text;
+        s.MKVPropEdit_Path  = TbxMKVPropEdit.Text;
+        s.MKVMerge_Path     = TbxMKVMerge.Text;
 
+        // Encode
+        s.GpuVendor = CbxGpuVendor.SelectedItem as string ?? "NVIDIA";
+
+        // Read preset from whichever panel is currently active.
+        // The inactive panel's combo is ignored — its value may be stale
+        // from a previous session with a different vendor.
+        var isIntel = s.GpuVendor.Equals("Intel", StringComparison.OrdinalIgnoreCase);
+        s.DefaultPreset = isIntel
+            ? CbxQsvDefaultPreset.SelectedItem as string ?? "medium"
+            : CbxDefaultPreset.SelectedItem    as string ?? "p5";
+
+        s.NvencQualityFlags     = TbxNvencQualityFlags.Text;
+        s.QsvQualityFlags       = TbxQsvQualityFlags.Text;
+        s.AlwaysConvertToHevc   = ChkAlwaysConvertToHevc.IsChecked == true;
+
+        // Remux
+        s.MKVMerge_Defaults = TbxMKVMergeDefaults.Text;
+        s.MKVMerge_Options  = TbxMKVMergeOptions.Text;
+        s.RoboCopy_Defaults = TbxRoboCopyDefaults.Text;
+
+        // File Names
         s.TitleCaseEnabled        = ChkTitleCase.IsChecked == true;
         s.ResolutionAppendEnabled = ChkResolutionAppend.IsChecked == true;
         s.ResolutionVerifyAlways  = ChkResolutionVerifyAlways.IsChecked == true;
-
-        s.WriteLogFiles  = ChkWriteLogFiles.IsChecked == true;
-        s.VerboseLogging = ChkVerboseLogging.IsChecked == true;
-        s.FfmpegLogLevel = CbxFfmpegLogLevel.SelectedItem as string ?? "verbose";
-        s.DisableMoveCompleted = ChkAutoMoveCompleted.IsChecked == true;
-
-        // Parse acronym list — split on commas, trim whitespace, remove empties
-        s.TitleCaseAcronyms = TbxAcronyms.Text
+        s.TitleCaseAcronyms       = TbxAcronyms.Text
             .Split(',')
             .Select(a => a.Trim())
             .Where(a => !string.IsNullOrEmpty(a))
             .ToList();
 
-        // Persist to disk — writes settings.json in AppData\Roaming\TranscodeTools
+        // Run
+        s.WriteLogFiles  = ChkWriteLogFiles.IsChecked == true;
+        s.VerboseLogging = ChkVerboseLogging.IsChecked == true;
+        s.FfmpegLogLevel = CbxFfmpegLogLevel.SelectedItem as string ?? "verbose";
+        s.DisableMoveCompleted = ChkAutoMoveCompleted.IsChecked == true;
+        if (int.TryParse(TbxHistorySize.Text, out var histSize) && histSize > 0)
+            s.RecentFolderHistorySize = histSize;
+
         s.Save();
     }
 
@@ -201,9 +225,6 @@ public partial class UserPreferences : Window
     {
         SaveSettings();
 
-        // Check that all required tool paths have been filled in.
-        // AllPathsSet() is a helper method on AppSettings that checks
-        // every mandatory path is non-empty.
         if (!AppSettings.Instance.AllPathsSet())
         {
             MessageBox.Show(
@@ -211,24 +232,17 @@ public partial class UserPreferences : Window
                 "Application Paths Missing",
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
-
-            // Don't close the window — let the user fix the missing paths.
-            // "return" exits this method early, same as Exit Sub in VB.NET.
             return;
         }
 
-        // All paths are set — close the window.
-        // DialogResult = true signals to the caller that the user clicked OK
-        // (as opposed to Cancel). The caller can check this if needed.
         DialogResult = true;
         Close();
     }
 
     private void BtnCancel_Click(object sender, RoutedEventArgs e)
     {
-        // Restore AppSettings.Instance to exactly what it was when the
-        // window opened. This discards any edits the user made in the
-        // text boxes without saving them — true Cancel behaviour.
+        // Restore every setting to the snapshot taken at open time.
+        // This discards any edits the user made without saving them.
         var s = AppSettings.Instance;
         s.MPV_Path                = _snapshot.MPV_Path;
         s.SubtitleEdit_Path       = _snapshot.SubtitleEdit_Path;
@@ -239,80 +253,49 @@ public partial class UserPreferences : Window
         s.MKVMerge_Defaults       = _snapshot.MKVMerge_Defaults;
         s.MKVMerge_Options        = _snapshot.MKVMerge_Options;
         s.RoboCopy_Defaults       = _snapshot.RoboCopy_Defaults;
-        s.AlwaysConvertToHevc        = _snapshot.AlwaysConvertToHevc;
-        s.DefaultPreset              = _snapshot.DefaultPreset;
-        s.NvencQualityFlags          = _snapshot.NvencQualityFlags;
-        s.RecentFolderHistorySize    = _snapshot.RecentFolderHistorySize;
-        s.TitleCaseEnabled           = _snapshot.TitleCaseEnabled;
-        s.TitleCaseAcronyms          = _snapshot.TitleCaseAcronyms
+        s.AlwaysConvertToHevc     = _snapshot.AlwaysConvertToHevc;
+        s.GpuVendor               = _snapshot.GpuVendor;
+        s.DefaultPreset           = _snapshot.DefaultPreset;
+        s.NvencQualityFlags       = _snapshot.NvencQualityFlags;
+        s.QsvQualityFlags         = _snapshot.QsvQualityFlags;
+        s.RecentFolderHistorySize = _snapshot.RecentFolderHistorySize;
+        s.TitleCaseEnabled        = _snapshot.TitleCaseEnabled;
+        s.TitleCaseAcronyms       = _snapshot.TitleCaseAcronyms
             .Split(',').Select(a => a.Trim()).Where(a => !string.IsNullOrEmpty(a)).ToList();
-        s.ResolutionAppendEnabled    = _snapshot.ResolutionAppendEnabled;
-        s.ResolutionVerifyAlways     = _snapshot.ResolutionVerifyAlways;
-        s.WriteLogFiles              = _snapshot.WriteLogFiles;
-        s.VerboseLogging             = _snapshot.VerboseLogging;
-        s.FfmpegLogLevel             = _snapshot.FfmpegLogLevel;
-        s.DisableMoveCompleted          = _snapshot.DisableMoveCompleted;
+        s.ResolutionAppendEnabled = _snapshot.ResolutionAppendEnabled;
+        s.ResolutionVerifyAlways  = _snapshot.ResolutionVerifyAlways;
+        s.WriteLogFiles           = _snapshot.WriteLogFiles;
+        s.VerboseLogging          = _snapshot.VerboseLogging;
+        s.FfmpegLogLevel          = _snapshot.FfmpegLogLevel;
+        s.DisableMoveCompleted    = _snapshot.DisableMoveCompleted;
 
         DialogResult = false;
         Close();
     }
 
-    // ── "Where" buttons ──────────────────────────────────────────────
-    // Each Where button runs "where <toolname>" via cmd.exe and puts
-    // the result into the corresponding text box.
-    // If the tool isn't on PATH, RunWhere returns an empty string.
+    // ── Encode tab — GPU Vendor panel swap ───────────────────────────
+    // When the vendor changes, show the matching settings panel and
+    // hide the other. The panels are named PnlNvidia and PnlIntel.
+    // Visibility.Collapsed removes the panel from layout entirely —
+    // it takes no space, which is what we want here.
+    private void CbxGpuVendor_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        // Guard: controls may not be initialised yet during InitializeComponent.
+        if (PnlNvidia == null || PnlIntel == null) return;
 
-    private void WhereMPV_Click(object sender, RoutedEventArgs e)
-        => TbxMPV.Text = RunWhere("mpv");
+        var isIntel = CbxGpuVendor.SelectedItem as string == "Intel";
+        PnlNvidia.Visibility = isIntel ? Visibility.Collapsed : Visibility.Visible;
+        PnlIntel.Visibility  = isIntel ? Visibility.Visible   : Visibility.Collapsed;
+    }
 
-    private void WhereSubtitleEdit_Click(object sender, RoutedEventArgs e)
-        => TbxSubtitleEdit.Text = RunWhere("SubtitleEdit");
-
-    private void WhereFFmpeg_Click(object sender, RoutedEventArgs e)
-        => TbxFFmpeg.Text = RunWhere("ffmpeg");
-
-    private void WhereFFprobe_Click(object sender, RoutedEventArgs e)
-        => TbxFFprobe.Text = RunWhere("ffprobe");
-
-    private void WhereMKVPropEdit_Click(object sender, RoutedEventArgs e)
-        => TbxMKVPropEdit.Text = RunWhere("mkvpropedit");
-
-    private void WhereMKVMerge_Click(object sender, RoutedEventArgs e)
-        => TbxMKVMerge.Text = RunWhere("mkvmerge");
-
-    // ── "Browse" buttons ─────────────────────────────────────────────
-    // Each Browse button opens a file picker so the user can navigate
-    // to the executable manually.
-
-    private void BrowseMPV_Click(object sender, RoutedEventArgs e)
-        => TbxMPV.Text = BrowseForExe() ?? TbxMPV.Text;
-    //                                   ^ If BrowseForExe returns null
-    //                                     (user cancelled), keep the
-    //                                     existing value unchanged.
-
-    private void BrowseSubtitleEdit_Click(object sender, RoutedEventArgs e)
-        => TbxSubtitleEdit.Text = BrowseForExe() ?? TbxSubtitleEdit.Text;
-
-    private void BrowseFFmpeg_Click(object sender, RoutedEventArgs e)
-        => TbxFFmpeg.Text = BrowseForExe() ?? TbxFFmpeg.Text;
-
-    private void BrowseFFprobe_Click(object sender, RoutedEventArgs e)
-        => TbxFFprobe.Text = BrowseForExe() ?? TbxFFprobe.Text;
-
-    private void BrowseMKVPropEdit_Click(object sender, RoutedEventArgs e)
-        => TbxMKVPropEdit.Text = BrowseForExe() ?? TbxMKVPropEdit.Text;
-
-    private void BrowseMKVMerge_Click(object sender, RoutedEventArgs e)
-        => TbxMKVMerge.Text = BrowseForExe() ?? TbxMKVMerge.Text;
-
-    // ── Run section enable/disable chain ─────────────────────────────
+    // ── Run tab — logging enable/disable chain ───────────────────────
     // Write Log Files controls whether Verbose Logging is enabled.
     // Verbose Logging controls whether the log level dropdown is enabled.
 
     private void ChkWriteLogFiles_Changed(object sender, RoutedEventArgs e)
     {
         var writeOn = ChkWriteLogFiles.IsChecked == true;
-        ChkVerboseLogging.IsEnabled  = writeOn;
+        ChkVerboseLogging.IsEnabled = writeOn;
         if (!writeOn)
         {
             ChkVerboseLogging.IsChecked = false;
@@ -332,66 +315,60 @@ public partial class UserPreferences : Window
         => SaveSettings();
 
     // ── Input validation ─────────────────────────────────────────────
-    // Prevents non-numeric characters being typed into the History Size box.
     private void HistorySize_PreviewTextInput(object sender, System.Windows.Input.TextCompositionEventArgs e)
     {
         e.Handled = !Regex.IsMatch(e.Text, @"^[0-9]+$");
     }
 
-    // ── Helper methods ───────────────────────────────────────────────
+    // ── Where buttons ────────────────────────────────────────────────
+    private void WhereMPV_Click(object sender, RoutedEventArgs e)           => TbxMPV.Text          = RunWhere("mpv");
+    private void WhereSubtitleEdit_Click(object sender, RoutedEventArgs e)  => TbxSubtitleEdit.Text = RunWhere("SubtitleEdit");
+    private void WhereFFmpeg_Click(object sender, RoutedEventArgs e)        => TbxFFmpeg.Text       = RunWhere("ffmpeg");
+    private void WhereFFprobe_Click(object sender, RoutedEventArgs e)       => TbxFFprobe.Text      = RunWhere("ffprobe");
+    private void WhereMKVPropEdit_Click(object sender, RoutedEventArgs e)   => TbxMKVPropEdit.Text  = RunWhere("mkvpropedit");
+    private void WhereMKVMerge_Click(object sender, RoutedEventArgs e)      => TbxMKVMerge.Text     = RunWhere("mkvmerge");
 
-    // Runs "where <toolName>" via cmd.exe and returns the first line
-    // of output (the full path), or an empty string if not found.
-    // "static" because it doesn't need any instance data.
+    // ── Browse buttons ───────────────────────────────────────────────
+    private void BrowseMPV_Click(object sender, RoutedEventArgs e)          => TbxMPV.Text          = BrowseForExe() ?? TbxMPV.Text;
+    private void BrowseSubtitleEdit_Click(object sender, RoutedEventArgs e) => TbxSubtitleEdit.Text = BrowseForExe() ?? TbxSubtitleEdit.Text;
+    private void BrowseFFmpeg_Click(object sender, RoutedEventArgs e)       => TbxFFmpeg.Text       = BrowseForExe() ?? TbxFFmpeg.Text;
+    private void BrowseFFprobe_Click(object sender, RoutedEventArgs e)      => TbxFFprobe.Text      = BrowseForExe() ?? TbxFFprobe.Text;
+    private void BrowseMKVPropEdit_Click(object sender, RoutedEventArgs e)  => TbxMKVPropEdit.Text  = BrowseForExe() ?? TbxMKVPropEdit.Text;
+    private void BrowseMKVMerge_Click(object sender, RoutedEventArgs e)     => TbxMKVMerge.Text     = BrowseForExe() ?? TbxMKVMerge.Text;
+
+    // ── Helpers ──────────────────────────────────────────────────────
+
+    // Runs "where <toolName>" via cmd.exe and returns the first result line,
+    // or an empty string if the tool is not on PATH.
     private static string RunWhere(string toolName)
     {
         try
         {
-            // ProcessStartInfo configures how to launch an external process.
-            // This is the same pattern as the original VB.NET RunCommandCom().
             var startInfo = new ProcessStartInfo("cmd.exe", $"/C where {toolName}")
             {
-                // These three settings let us capture the output as text
-                // rather than showing a console window to the user.
-                CreateNoWindow        = true,
-                UseShellExecute       = false,
+                CreateNoWindow         = true,
+                UseShellExecute        = false,
                 RedirectStandardOutput = true
             };
-
-            // Start the process, read the first line of output, then
-            // wait for it to finish.
             using var process = Process.Start(startInfo);
-            // ReadLine() returns null if there's no output (tool not found).
-            // ?? "" converts null to an empty string.
             var result = process?.StandardOutput.ReadLine() ?? "";
             process?.WaitForExit();
             return result.Trim();
         }
-        catch
-        {
-            // If anything goes wrong (cmd.exe not found etc.) return empty.
-            return "";
-        }
+        catch { return ""; }
     }
 
-    // Opens a file browser dialog and returns the selected file path,
-    // or null if the user cancelled.
-    // string? means the return type is a nullable string.
+    // Opens a file browser dialog and returns the selected path, or null on cancel.
     private static string? BrowseForExe()
     {
         var dialog = new OpenFileDialog
         {
             Title            = "Find Program Path",
             InitialDirectory = @"C:\",
-            // Filter format: "Display name|*.extension|..."
-            // This shows all files, same as the original VB.NET version.
             Filter           = "Executable files (*.exe)|*.exe|All files (*.*)|*.*",
             FilterIndex      = 1,
             RestoreDirectory = true
         };
-
-        // ShowDialog() returns true if the user selected a file.
-        // == true handles the nullable bool return, same pattern as elsewhere.
         return dialog.ShowDialog() == true ? dialog.FileName : null;
     }
 }

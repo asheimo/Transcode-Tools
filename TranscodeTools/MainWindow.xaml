@@ -80,6 +80,11 @@
             <sys:String>p5</sys:String>
             <sys:String>p6</sys:String>
             <sys:String>p7</sys:String>
+            <sys:String>veryfast</sys:String>
+            <sys:String>fast</sys:String>
+            <sys:String>medium</sys:String>
+            <sys:String>slow</sys:String>
+            <sys:String>veryslow</sys:String>
         </x:Array>
         <x:Array x:Key="VideoFrameRateOptions" Type="sys:String">
             <sys:String>Keep</sys:String>

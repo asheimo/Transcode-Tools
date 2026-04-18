@@ -156,20 +156,34 @@ public static class CommandBuilder
     }
 
     // ── Transcode command ─────────────────────────────────────────────
-    // Builds a direct ffmpeg command using the NVIDIA CUDA hardware pipeline.
+    // Builds a direct ffmpeg command using hardware acceleration.
+    // The vendor is determined by AppSettings.Instance.GpuVendor:
+    //   "NVIDIA" (default) → CUDA/NVENC pipeline
+    //   "Intel"            → QSV pipeline
     //
-    // Pipeline:
+    // NVIDIA CUDA pipeline:
     //   -hwaccel cuda -hwaccel_output_format cuda   keep pipeline on GPU
-    //   -c:v <cuvid decoder>                         hardware decode (app chooses)
-    //   -i "input.mkv"
-    //   -map 0:v:0 -c:v hevc_nvenc / h264_nvenc     hardware encode (user chooses)
-    //   -preset p1—–p7                               quality/speed (user chooses)
-    //   -highbitdepth true                           only when: output=hevc, source is 8-bit
-    //   -filter:v scale_cuda=format=p010le           only when: output=hevc, source is 8-bit
-    //   -map 0:a:N -c:a copy / eac3 / ac3           per audio track (user chooses)
-    //   -b:a:N <bitrate>k                            when encoding audio (user chooses)
+    //   -c:v <codec>_cuvid                           hardware decode
+    //   -map 0:v:0 -c:v hevc_nvenc / h264_nvenc     hardware encode
+    //   -preset p1–p7                                quality/speed
+    //   -highbitdepth true                           only: hevc, 8-bit source
+    //   -filter:v scale_cuda=format=p010le           only: hevc, 8-bit source
+    //   -filter:v yadif_cuda=mode=1                  only: interlaced source
+    //
+    // Intel QSV pipeline:
+    //   -hwaccel qsv -hwaccel_output_format qsv      keep pipeline on QSV surfaces
+    //   -c:v <codec>_qsv                             hardware decode
+    //   -map 0:v:0 -c:v hevc_qsv / h264_qsv         hardware encode
+    //   -preset veryfast/fast/medium/slow/veryslow   quality/speed
+    //   -filter:v scale_qsv=format=p010le            only: hevc, 8-bit source
+    //   -filter:v deinterlace_qsv                    only: interlaced source
+    //
+    // Shared (both vendors):
+    //   -map 0:a:N -c:a copy / eac3 / ac3           per audio track
+    //   -b:a:N <bitrate>k                            when encoding audio
     //   -map 0:s:N -c:s copy                         per subtitle track
-    //   "output.mkv"
+    //   HDR10 color metadata flags                   bt2020 sources only
+    //   DoVi copy path                               bypasses all hwaccel
     //
     // Note: -colorspace:v bt709 is intentionally omitted — breaks the CUDA pipeline.
     //
@@ -241,35 +255,74 @@ public static class CommandBuilder
             return sb.ToString();
         }
 
-        // ── Normal NVENC encode path (SDR and HDR10/HLG) ─────────────
+        // ── Normal hardware encode path (SDR and HDR10/HLG) ──────────
+        // Branches on GpuVendor: "Intel" → QSV pipeline; anything else → NVENC.
+        // The two paths differ only in hwaccel flags, decoder names, encoder
+        // names, quality flags, and filter names. Audio, subtitles, HDR
+        // metadata, logging, and the DoVi copy path above are shared.
+
+        var useIntel = AppSettings.Instance.GpuVendor
+            .Equals("Intel", StringComparison.OrdinalIgnoreCase);
 
         // ── Determine encode codec ────────────────────────────────────
-        // User's OutputFormat choice drives this.
+        // User's OutputFormat choice drives this — same logic for both vendors.
         var useHevc     = video == null ||
             !video.OutputFormat.Equals("h.264", StringComparison.OrdinalIgnoreCase);
-        var encodeCodec = useHevc ? "hevc_nvenc" : "h264_nvenc";
-        var preset      = video?.Preset ?? AppSettings.Instance.DefaultPreset;
+
+        var encodeCodec = useIntel
+            ? (useHevc ? "hevc_qsv" : "h264_qsv")
+            : (useHevc ? "hevc_nvenc" : "h264_nvenc");
+
+        var preset = video?.Preset ?? AppSettings.Instance.DefaultPreset;
 
         // ── Determine hardware decoder ────────────────────────────────
-        // App maps source codec_name to the appropriate NVDEC decoder.
+        // Each vendor has its own set of hardware decoder names.
+        // QSV decoders follow the pattern <codec>_qsv.
+        // NVDEC decoders follow <codec>_cuvid.
         var sourceCodec = video?.CodecName?.ToLowerInvariant() ?? "";
-        var hwDecoder = sourceCodec switch
+
+        string hwDecoder;
+        if (useIntel)
         {
-            "h264"        => "h264_cuvid",
-            "hevc"        => "hevc_cuvid",
-            "mpeg2video"  => "mpeg2_cuvid",
-            "vc1"         => "vc1_cuvid",
-            "vp8"         => "vp8_cuvid",
-            "vp9"         => "vp9_cuvid",
-            "av1"         => "av1_cuvid",
-            _             => "h264_cuvid"   // fallback — flagged for future revisit
-        };
+            // Intel QSV hardware decoders.
+            // av1_qsv requires a 12th-gen (Alder Lake) or newer GPU; on older
+            // hardware ffmpeg will fall back to software decode automatically
+            // when the QSV session cannot be initialised for that codec.
+            hwDecoder = sourceCodec switch
+            {
+                "h264"       => "h264_qsv",
+                "hevc"       => "hevc_qsv",
+                "mpeg2video" => "mpeg2_qsv",
+                "vc1"        => "vc1_qsv",
+                "vp8"        => "vp8_qsv",
+                "vp9"        => "vp9_qsv",
+                "av1"        => "av1_qsv",
+                _            => "h264_qsv"   // fallback — flagged for future revisit
+            };
+        }
+        else
+        {
+            // NVIDIA NVDEC (CUVID) hardware decoders — original pipeline.
+            hwDecoder = sourceCodec switch
+            {
+                "h264"       => "h264_cuvid",
+                "hevc"       => "hevc_cuvid",
+                "mpeg2video" => "mpeg2_cuvid",
+                "vc1"        => "vc1_cuvid",
+                "vp8"        => "vp8_cuvid",
+                "vp9"        => "vp9_cuvid",
+                "av1"        => "av1_cuvid",
+                _            => "h264_cuvid"  // fallback — flagged for future revisit
+            };
+        }
 
         // ── Determine whether 10-bit conversion is needed ─────────────
-        // Only relevant when output is hevc. If the source pixel format
-        // already contains "10" (e.g. yuv420p10le) it is already 10-bit
-        // and no conversion is needed. 8-bit sources (e.g. yuv420p) need
-        // -highbitdepth true and scale_cuda to convert to p010le.
+        // Only relevant when output is HEVC. If the source pixel format already
+        // contains "10" (e.g. yuv420p10le) it is already 10-bit and no
+        // conversion is needed. 8-bit sources (e.g. yuv420p) need conversion.
+        //
+        // NVENC path: -highbitdepth true + scale_cuda=format=p010le
+        // QSV path:   scale_qsv=format=p010le  (-highbitdepth is NVENC-only)
         var sourcePixFmt  = video?.PixelFormat?.ToLowerInvariant() ?? "";
         var sourceIs10bit = sourcePixFmt.Contains("10");
         var needs10bit    = useHevc && !sourceIs10bit;
@@ -282,40 +335,58 @@ public static class CommandBuilder
 
         // -analyzeduration / -probesize: increases the amount of data ffmpeg reads
         // before starting. Required for PGS subtitle streams in MKV where the
-        // dimensions are not declared in the container header (stream 4 in this case).
+        // dimensions are not declared in the container header.
         // Only affects startup analysis time, not encode speed.
         sb.Append(" -analyzeduration 100M -probesize 100M");
 
-        // Hardware acceleration flags and decoder must come before -i
-        sb.Append(" -hwaccel cuda -hwaccel_output_format cuda");
-        sb.Append($" -c:v {hwDecoder}");
+        // ── Hardware acceleration and decoder flags (before -i) ───────
+        if (useIntel)
+        {
+            // QSV pipeline: -hwaccel qsv keeps frames in QSV memory surfaces
+            // through decode → filter → encode without a GPU↔CPU round trip.
+            // -hwaccel_output_format qsv tells the decoder to leave decoded
+            // frames in QSV surface format rather than copying to system RAM.
+            sb.Append(" -hwaccel qsv -hwaccel_output_format qsv");
+            sb.Append($" -c:v {hwDecoder}");
+        }
+        else
+        {
+            // CUDA pipeline — original behaviour.
+            sb.Append(" -hwaccel cuda -hwaccel_output_format cuda");
+            sb.Append($" -c:v {hwDecoder}");
+        }
 
         sb.Append($" -i \"{inputFile}\"");
 
-        // Video encode
+        // ── Video encode ──────────────────────────────────────────────
         sb.Append(" -map 0:v:0");
         sb.Append($" -c:v {encodeCodec}");
-        // Only emit -preset if the preset is not set to "None".
-        // "None" lets NVENC choose its own preset automatically.
+
+        // Preset: "None" omits the flag (NVENC auto-selects; QSV defaults to
+        // "medium"). For QSV, omitting -preset disables -global_quality ICQ
+        // mode, so "None" effectively falls back to QSV CBR — only do this
+        // intentionally. Preset values p1–p7 are NVENC-only; QSV uses named
+        // presets (veryfast/fast/medium/slow/veryslow). The UI exposes both
+        // sets in VideoPresetOptions — the user is responsible for choosing
+        // a value appropriate for the active vendor.
         if (!preset.Equals("None", StringComparison.OrdinalIgnoreCase))
             sb.Append($" -preset {preset}");
 
-        // Quality flags — sourced from User Preferences (NVENC Quality Flags field).
-        // Defaults to confirmed optimal pixel-tested settings:
-        //   -cq 19 -spatial-aq 1 -aq-strength 10
-        var qualityFlags = AppSettings.Instance.NvencQualityFlags;
+        // Quality flags — vendor-specific.
+        // NVENC: -cq 19 -spatial-aq 1 -aq-strength 10  (constant quality + AQ)
+        // QSV:   -global_quality 23 -look_ahead 1       (ICQ mode + look-ahead)
+        var qualityFlags = useIntel
+            ? AppSettings.Instance.QsvQualityFlags
+            : AppSettings.Instance.NvencQualityFlags;
         if (!string.IsNullOrWhiteSpace(qualityFlags))
             sb.Append($" {qualityFlags.Trim()}");
 
         // ── HDR10 / HLG color metadata passthrough ────────────────────
+        // Identical for both vendors — ffmpeg color flags are encoder-agnostic.
         // When the source has bt2020 primaries (HDR10 or HLG), we must
         // explicitly tag the output stream with the same color metadata.
         // Without these flags, ffmpeg leaves the output untagged and
         // players fall back to SDR tone-mapping on HDR displays.
-        //
-        // We pass through the exact values read from ffprobe rather than
-        // hardcoding, so HLG (arib-std-b67) is handled correctly alongside
-        // HDR10 (smpte2084).
         //
         // DoVi is handled above via the copy path — this block is only
         // reached for SDR and HDR10/HLG sources.
@@ -331,42 +402,49 @@ public static class CommandBuilder
                 sb.Append($" -colorspace {video.ColorSpace}");
 
             // Static HDR10 SEI: mastering display color volume (SEI 137).
-            // Encodes the display the master was graded on — primaries, white
-            // point, and peak/floor luminance. Without this, players cannot
-            // perform accurate HDR tone-mapping even if color tags are correct.
             if (!string.IsNullOrWhiteSpace(video.MasterDisplay))
                 sb.Append($" -master_display \"{video.MasterDisplay}\"");
 
             // Static HDR10 SEI: content light level (SEI 144).
-            // MaxCLL (max content light level) and MaxFALL (max frame-average
-            // light level) tell displays the brightest highlights in the content.
-            // Stored as "MaxCLL,MaxFALL" — e.g. "1000,400".
+            // MaxCLL,MaxFALL — e.g. "1000,400".
             if (!string.IsNullOrWhiteSpace(video.MaxCll))
                 sb.Append($" -max_cll \"{video.MaxCll}\"");
         }
 
         // ── Video filter chain ────────────────────────────────────────
-        // Two filters may be needed, and must be chained with a comma
-        // when both are present: -filter:v yadif_cuda=mode=1,scale_cuda=format=p010le
+        // Filters are vendor-specific because QSV and CUDA use different
+        // hardware filter implementations, but the logic deciding WHICH
+        // filters are needed is identical.
         //
-        // yadif_cuda=mode=1 — GPU deinterlace (mode=1 = one output frame per
-        //   input frame, preserving the original frame rate). Only when interlaced.
+        // NVENC filters:
+        //   yadif_cuda=mode=1           — GPU deinterlace
+        //   scale_cuda=format=p010le    — 8-bit→10-bit on GPU
+        //   -highbitdepth true          — encoder flag paired with scale_cuda
         //
-        // scale_cuda=format=p010le — converts 8-bit decoded frames to 10-bit
-        //   on the GPU before encoding. Only when output is HEVC and source is 8-bit.
-        //   Paired with -highbitdepth true on the encoder.
+        // QSV filters:
+        //   deinterlace_qsv             — GPU deinterlace (no mode arg needed;
+        //                                 QSV deinterlace always outputs one
+        //                                 frame per input field pair)
+        //   scale_qsv=format=p010le     — 8-bit→10-bit on QSV surface
+        //   (-highbitdepth is NVENC-only — not used in QSV path)
         //
         // Order matters: deinterlace must come before pixel format conversion.
         var isInterlaced = video?.IsInterlaced ?? false;
 
         if (isInterlaced || needs10bit)
         {
-            if (needs10bit)
+            // -highbitdepth is NVENC-only — not applicable for QSV
+            if (needs10bit && !useIntel)
                 sb.Append(" -highbitdepth true");
 
             var filterParts = new List<string>();
-            if (isInterlaced) filterParts.Add("yadif_cuda=mode=1");
-            if (needs10bit)   filterParts.Add("scale_cuda=format=p010le");
+
+            if (isInterlaced)
+                filterParts.Add(useIntel ? "deinterlace_qsv" : "yadif_cuda=mode=1");
+
+            if (needs10bit)
+                filterParts.Add(useIntel ? "scale_qsv=format=p010le" : "scale_cuda=format=p010le");
+
             sb.Append($" -filter:v {string.Join(",", filterParts)}");
         }
 

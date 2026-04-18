@@ -73,6 +73,16 @@ public sealed class AppSettings
     // robocopied, requiring the user to explicitly save settings first.
     public bool AlwaysConvertToHevc { get; set; } = true;
 
+    // ── GPU vendor selection ─────────────────────────────────────────
+    // Controls which hardware acceleration pipeline CommandBuilder emits.
+    // "NVIDIA" → CUDA/NVENC/CUVID (existing pipeline).
+    // "Intel"  → QSV pipeline (Intel Quick Sync Video).
+    // Changing this does not invalidate saved settings files — the saved
+    // command is stored verbatim and is not rebuilt from the vendor setting.
+    // Only new builds (View Command / Save Settings / run without settings)
+    // pick up the active vendor.
+    public string GpuVendor { get; set; } = "NVIDIA";
+
     // ── NVENC defaults ───────────────────────────────────────────────
     // DefaultPreset: the preset applied to new files on load. "None" omits
     // the -preset flag entirely, letting NVENC choose automatically.
@@ -80,6 +90,28 @@ public sealed class AppSettings
     // Defaults match the confirmed optimal pixel-tested settings.
     public string DefaultPreset      { get; set; } = "p5";
     public string NvencQualityFlags  { get; set; } = "-cq 19 -spatial-aq 1 -aq-strength 10";
+
+    // ── QSV defaults ─────────────────────────────────────────────────
+    // QsvQualityFlags: quality flag string appended after -preset for Intel QSV.
+    // All flags below are confirmed valid for both hevc_qsv and h264_qsv.
+    //
+    // -global_quality 23: ICQ (intelligent constant quality) mode — the QSV
+    //   equivalent of NVENC -cq. Lower = better quality. 23 is a good starting
+    //   point; adjust down (e.g. 20) for higher quality at larger file sizes.
+    //   Requires -preset to be set (not None) to activate ICQ mode.
+    // -scenario 3: hints the encoder this is archival content, biasing toward
+    //   quality over latency. No performance cost.
+    // -mbbrc 1: macroblock-level bitrate control — varies quantization per
+    //   macroblock rather than per frame. Equivalent in spirit to NVENC -spatial-aq.
+    // -rdo 1: rate distortion optimisation — better quantization decisions per block.
+    // -adaptive_i 1: adaptive I-frame placement — better for scene cuts.
+    // -adaptive_b 1: adaptive B-frame placement — better for motion content.
+    //
+    // Note: -look_ahead is h264_qsv only. hevc_qsv uses -look_ahead_depth with
+    //   -extbrc 1 instead. Not included by default; add manually if needed.
+    // Note: -global_quality only applies when -preset is also set (QSV ICQ
+    //   mode requires a preset). DefaultPreset should be "medium" for QSV.
+    public string QsvQualityFlags { get; set; } = "-global_quality 23 -scenario 3 -mbbrc 1 -rdo 1 -adaptive_i 1 -adaptive_b 1";
 
     // ── File Name Corrections ───────────────────────────────────────
     // Title Case: auto-corrects display names on folder load.

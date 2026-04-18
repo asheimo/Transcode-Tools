@@ -589,6 +589,12 @@
         <Setter Property="VerticalAlignment" Value="Center"/>
         <Setter Property="HorizontalAlignment" Value="Center"/>
         <Setter Property="Cursor" Value="Hand"/>
+        <Style.Triggers>
+            <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.35"/>
+                <Setter Property="Cursor" Value="Arrow"/>
+            </Trigger>
+        </Style.Triggers>
     </Style>
 
     <Style TargetType="Menu">
@@ -617,6 +623,90 @@
                     <Border Height="1"
                             Background="{TemplateBinding Background}"
                             Margin="{TemplateBinding Margin}"/>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ── TabControl / TabItem ──────────────────────────────────────────
+         Full ControlTemplate overrides to match the app's flat Aero2 theme.
+         TabControl: removes the default raised-border chrome and uses SurfaceBg.
+         TabItem:    flat header tabs — normal/hover/selected states all themed.
+         Selected tab uses AccentColor underline rather than a raised border.
+         The content area sits in a themed Border that matches other sections.  -->
+
+    <Style TargetType="TabControl">
+        <Setter Property="Background"   Value="{DynamicResource WindowBg}"/>
+        <Setter Property="BorderBrush"  Value="{DynamicResource BorderColor}"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Padding"      Value="0"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TabControl">
+                    <DockPanel>
+                        <!-- Tab header strip -->
+                        <Border DockPanel.Dock="Top"
+                                Background="{DynamicResource SurfaceBg}"
+                                BorderBrush="{DynamicResource BorderColor}"
+                                BorderThickness="0,0,0,1">
+                            <TabPanel x:Name="HeaderPanel"
+                                      IsItemsHost="True"
+                                      Margin="4,4,4,0"/>
+                        </Border>
+                        <!-- Tab content area -->
+                        <Border Background="{DynamicResource WindowBg}"
+                                Padding="0">
+                            <ContentPresenter x:Name="PART_SelectedContentHost"
+                                              ContentSource="SelectedContent"/>
+                        </Border>
+                    </DockPanel>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style TargetType="TabItem">
+        <Setter Property="Foreground"        Value="{DynamicResource SubtleForeground}"/>
+        <Setter Property="Background"        Value="Transparent"/>
+        <Setter Property="BorderThickness"   Value="0"/>
+        <Setter Property="Padding"           Value="14,8"/>
+        <Setter Property="FontSize"          Value="13"/>
+        <Setter Property="Cursor"            Value="Hand"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TabItem">
+                    <Grid x:Name="templateRoot" SnapsToDevicePixels="True">
+                        <!-- Accent underline — only visible when selected -->
+                        <Border x:Name="selectedLine"
+                                Height="2"
+                                Background="{DynamicResource AccentColor}"
+                                VerticalAlignment="Bottom"
+                                Visibility="Collapsed"/>
+                        <ContentPresenter x:Name="contentPresenter"
+                                          ContentSource="Header"
+                                          Margin="{TemplateBinding Padding}"
+                                          TextElement.Foreground="{TemplateBinding Foreground}"
+                                          TextElement.FontSize="{TemplateBinding FontSize}"
+                                          SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}"/>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <!-- Hover: brighten label -->
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="contentPresenter"
+                                    Property="TextElement.Foreground"
+                                    Value="{DynamicResource ForegroundColor}"/>
+                        </Trigger>
+                        <!-- Selected: full brightness + accent underline -->
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="contentPresenter"
+                                    Property="TextElement.Foreground"
+                                    Value="{DynamicResource ForegroundColor}"/>
+                            <Setter Property="FontWeight" Value="SemiBold"/>
+                            <Setter TargetName="selectedLine"
+                                    Property="Visibility"
+                                    Value="Visible"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>

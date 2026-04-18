@@ -98,8 +98,6 @@ public partial class RunRemux : Window
         // Update window title to match mode
         Title = isTranscodeMode ? "Run Transcode" : "Run Remux";
 
-        // Raise RunCompleted when the window closes so MainWindow can
-        // refresh its folder tree to reflect any moves that took place.
         Closed += (_, _) => RunCompleted?.Invoke(this, EventArgs.Empty);
     }
 
@@ -255,6 +253,8 @@ public partial class RunRemux : Window
                     Background = hasSettings ? Brushes.Green : Brushes.White,
                     Tag        = fileNode
                 };
+                fileCheckBox.Checked   += FileCheckBox_Changed;
+                fileCheckBox.Unchecked += FileCheckBox_Changed;
 
                 var fileItem = new TreeViewItem
                 {
@@ -299,7 +299,10 @@ public partial class RunRemux : Window
 
     // ── Show files toggle ─────────────────────────────────────────────
     private void ShowFilesCheckBox_Changed(object sender, RoutedEventArgs e)
-        => PopulateFolderTree();
+    {
+        PopulateFolderTree();
+        SyncTestModeCheckBox();
+    }
 
     // ── Select All checkbox ───────────────────────────────────────────
     // Checks or unchecks every selectable folder/season checkbox in the tree.
@@ -382,6 +385,64 @@ public partial class RunRemux : Window
         {
             _suppressSelectAllSync = false;
         }
+
+        SyncTestModeCheckBox();
+    }
+
+    // Fires when an individual file checkbox is checked or unchecked.
+    private void FileCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        // Snapshot test mode state BEFORE SyncSelectAllCheckBox runs —
+        // SyncTestModeCheckBox (called from within) will disable and clear
+        // test mode if count != 1, so we'd never see IsChecked == true after.
+        var testModeWasOn = TestModeCheckBox.IsChecked == true;
+
+        SyncSelectAllCheckBox();
+
+        // If test mode was on and a second file was just checked, warn and clear it.
+        if (testModeWasOn && CountCheckedFileNodes(FolderTree.Items) > 1)
+        {
+            MessageBox.Show(
+                "Test Mode can only be used with a single file.\n\nTest Mode has been unchecked.",
+                "Test Mode",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            TestModeCheckBox.IsChecked = false;
+        }
+    }
+
+    // Test Mode is only enabled when: transcode mode, individual files visible,
+    // and exactly one file checkbox is checked.
+    private void SyncTestModeCheckBox()
+    {
+        if (!_isTranscodeMode || ShowFilesCheckBox.IsChecked != true)
+        {
+            TestModeCheckBox.IsEnabled = false;
+            TestModeCheckBox.IsChecked = false;
+            return;
+        }
+
+        var count = CountCheckedFileNodes(FolderTree.Items);
+        TestModeCheckBox.IsEnabled = count == 1;
+
+        if (!TestModeCheckBox.IsEnabled)
+            TestModeCheckBox.IsChecked = false;
+    }
+
+    // Counts file checkboxes (Tag = RunFileNode, Header = CheckBox) that are checked.
+    private int CountCheckedFileNodes(ItemCollection items)
+    {
+        var count = 0;
+        foreach (TreeViewItem item in items)
+        {
+            if (item.Tag is RunFileNode &&
+                item.Header is CheckBox cb &&
+                cb.IsChecked == true)
+                count++;
+            if (item.Items.Count > 0)
+                count += CountCheckedFileNodes(item.Items);
+        }
+        return count;
     }
 
     private List<CheckBox> CollectAllFolderCheckBoxes(ItemCollection items)
@@ -676,6 +737,11 @@ public partial class RunRemux : Window
         var writeLog        = settings.WriteLogFiles;
         var verboseLogging  = writeLog && settings.VerboseLogging;
 
+        // Test mode: encode 5 minutes from 10:00 into the source.
+        // Only active in transcode mode — read once here and applied
+        // consistently throughout this file's processing.
+        var testMode = _isTranscodeMode && (TestModeCheckBox.IsChecked == true);
+
         // ── Prepare log file if enabled ───────────────────────────────
         StreamWriter? logWriter = null;
         _currentLogPath = null;
@@ -719,6 +785,11 @@ public partial class RunRemux : Window
                 // the file on disk always reflects the canonical non-verbose form.
                 if (verboseLogging && _isTranscodeMode)
                     command = SwapLogFlags(command);
+
+                // Test mode: inject -ss/-t and redirect output to Test\ subfolder.
+                // Applied after verbose swap so the on-disk command is never touched.
+                if (testMode)
+                    command = ApplyTestMode(command);
 
                 // Show command in window and write to log
                 AppendLog($"Command: {command}");
@@ -792,12 +863,18 @@ public partial class RunRemux : Window
                     // No settings file — run from defaults but do NOT save to disk.
                     // The user should explicitly save settings from the main window.
                     AppendLog($"  (No settings file found — running from defaults)");
+
+                    // Test mode: inject -ss/-t and redirect output to Test\ subfolder.
+                    if (testMode)
+                        command = ApplyTestMode(command);
+
                     AppendLog($"Command: {command}");
                     AppendLog("");
                     logWriter?.WriteLine($"Command: {command}");
                     logWriter?.WriteLine();
 
-                    Directory.CreateDirectory(Path.Combine(_outputDirectory, file.FolderName));
+                    var effectiveOutputFolder = Path.Combine(_outputDirectory, file.FolderName);
+                    Directory.CreateDirectory(effectiveOutputFolder);
                     await LogTranscodeSummaryAsync(command, logWriter);
 
                     var exe  = command.StartsWith("\"")
@@ -868,6 +945,57 @@ public partial class RunRemux : Window
         // Handle both orderings that CommandBuilder may produce.
         command = command.Replace("-loglevel error -stats", verboseStr);
         command = command.Replace("-loglevel error", verboseStr);
+        return command;
+    }
+
+    // Modifies a transcode command for test mode:
+    //   - Injects -ss 00:10:00 -t 00:05:00 immediately before -i so ffmpeg
+    //     decodes only 5 minutes of source starting at the 10-minute mark.
+    //     Seek goes before -i (input-side) so hardware decoders (cuvid/qsv)
+    //     can seek efficiently without decoding from the start.
+    //   - Injects -ss 00:10:00 -t 00:05:00 as output options (after -i).
+    //     Output-side seek works correctly with hardware decoders (QSV/CUDA)
+    //     which cannot perform random-access input-side seeks.
+    //   - Renames the output file with a [test-<method>] moniker so test clips
+    //     are clearly identifiable alongside real encodes in the output folder.
+    //     e.g.  Beetlejuice (1998)-480p.mkv
+    //       →   Beetlejuice (1998)-480p [test-qsv].mkv
+    private string ApplyTestMode(string command)
+    {
+        // ── Inject -ss and -t after the input file path ───────────────
+        // Output-side: ffmpeg decodes from the start, discards until 10:00,
+        // then encodes 5 minutes. Works correctly with all hardware decoders.
+        var iIdx = command.IndexOf(" -i \"", StringComparison.Ordinal);
+        if (iIdx >= 0)
+        {
+            var inputQuoteStart = command.IndexOf('"', iIdx + 4);
+            var inputQuoteEnd   = command.IndexOf('"', inputQuoteStart + 1);
+            if (inputQuoteEnd >= 0)
+                command = command.Insert(inputQuoteEnd + 1, " -ss 00:10:00 -t 00:05:00");
+        }
+
+        // ── Rename output file with [test-<method>] moniker ───────────
+        var vendor    = AppSettings.Instance.GpuVendor;
+        var methodTag = vendor.Equals("Intel", StringComparison.OrdinalIgnoreCase)
+            ? "test-qsv" : "test-nvenc";
+
+        var lastQuoteEnd   = command.LastIndexOf('"');
+        var lastQuoteStart = command.LastIndexOf('"', lastQuoteEnd - 1);
+
+        if (lastQuoteStart >= 0 && lastQuoteEnd > lastQuoteStart)
+        {
+            var outputPath = command.Substring(lastQuoteStart + 1,
+                                               lastQuoteEnd - lastQuoteStart - 1);
+            var dir      = Path.GetDirectoryName(outputPath) ?? "";
+            var nameNoEx = Path.GetFileNameWithoutExtension(outputPath);
+            var ext      = Path.GetExtension(outputPath);
+            var testPath = Path.Combine(dir, $"{nameNoEx} [{methodTag}]{ext}");
+
+            command = command.Substring(0, lastQuoteStart + 1) +
+                      testPath +
+                      command.Substring(lastQuoteEnd);
+        }
+
         return command;
     }
 

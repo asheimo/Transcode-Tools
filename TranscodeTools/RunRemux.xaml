@@ -41,6 +41,15 @@
                               Margin="16,0,0,0"
                               Checked="ShowFilesCheckBox_Changed"
                               Unchecked="ShowFilesCheckBox_Changed"/>
+                    <!-- Test Mode — transcode only. Encodes 5 minutes from 10:00.
+                         Output goes to Test\ subfolder so test files never mix
+                         with real output. Disabled automatically in remux mode. -->
+                    <CheckBox x:Name="TestModeCheckBox"
+                              Content="Test Mode  (5 min from 10:00)"
+                              VerticalAlignment="Center"
+                              Margin="24,0,0,0"
+                              IsEnabled="False"
+                              ToolTip="Encodes 5 minutes starting at 10:00. Transcode mode only — enabled when exactly one file is selected."/>
                 </StackPanel>
 
                 <!-- Start and Close/Cancel buttons — right aligned -->

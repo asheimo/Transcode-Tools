@@ -1,55 +1,56 @@
 <!-- ============================================================
      UserPreferences.xaml
      ============================================================
-     This is the User Preferences window. It lets the user set
-     the paths to all the external tools the application needs,
-     as well as default command-line option strings.
-
-     Layout: A ScrollViewer containing a grid of rows.
-     Each tool row has: Label | TextBox | [Where] [Browse]
-     Options rows have: Label | TextBox (full width)
+     Tabbed preferences window. Five tabs:
+       1. Tool Paths   — external executable paths
+       2. Encode       — GPU vendor, presets, quality flags, HEVC default
+       3. Remux        — MKVMerge and RoboCopy defaults
+       4. File Names   — title case, resolution append
+       5. Run          — logging, auto-move, folder history
      ============================================================ -->
 <Window x:Class="TranscodeTools.UserPreferences"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:sys="clr-namespace:System;assembly=mscorlib"
         Title="User Preferences"
-        Width="700" Height="620"
-        MinWidth="600" MinHeight="500"
+        Width="700" Height="560"
+        MinWidth="600" MinHeight="480"
         WindowStartupLocation="CenterOwner"
         ResizeMode="CanResize"
         Background="{DynamicResource WindowBg}"
         GotKeyboardFocus="Window_GotKeyboardFocus">
 
     <Window.Resources>
-        <!-- Label style for the left-hand column -->
+
+        <!-- Label style — left column of every settings grid -->
         <Style x:Key="PrefLabel" TargetType="TextBlock">
-            <Setter Property="Foreground"           Value="{DynamicResource ForegroundColor}"/>
-            <Setter Property="FontSize"             Value="13"/>
-            <Setter Property="VerticalAlignment"    Value="Center"/>
-            <Setter Property="Margin"               Value="0,0,10,0"/>
+            <Setter Property="Foreground"        Value="{DynamicResource ForegroundColor}"/>
+            <Setter Property="FontSize"          Value="13"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin"            Value="0,0,10,0"/>
         </Style>
 
-        <!-- Section header style -->
-        <Style x:Key="SectionHeader" TargetType="TextBlock">
-            <Setter Property="Foreground"  Value="{DynamicResource SubtleForeground}"/>
-            <Setter Property="FontSize"    Value="11"/>
-            <Setter Property="FontWeight"  Value="SemiBold"/>
-            <Setter Property="Margin"      Value="0,12,0,6"/>
+        <!-- Subtle description text under checkboxes / controls -->
+        <Style x:Key="HintText" TargetType="TextBlock">
+            <Setter Property="Foreground"   Value="{DynamicResource SubtleForeground}"/>
+            <Setter Property="FontSize"     Value="11"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Margin"       Value="22,2,0,10"/>
         </Style>
 
-        <!-- Small button for Where / Browse -->
+        <!-- Where / Browse buttons in Tool Paths tab -->
         <Style x:Key="SmallButton" TargetType="Button" BasedOn="{StaticResource FlatButton}">
             <Setter Property="Padding"  Value="8,4"/>
             <Setter Property="FontSize" Value="12"/>
             <Setter Property="Margin"   Value="4,0,0,0"/>
             <Setter Property="MinWidth" Value="60"/>
         </Style>
+
     </Window.Resources>
 
     <DockPanel>
 
-        <!-- OK / Cancel button bar at the bottom -->
+        <!-- ── OK / Cancel bar (bottom, always visible) ──────────── -->
         <Border DockPanel.Dock="Bottom"
                 Background="{DynamicResource SurfaceBg}"
                 BorderBrush="{DynamicResource SeparatorColor}"
@@ -71,268 +72,340 @@
             </StackPanel>
         </Border>
 
-        <!-- Scrollable content area -->
-        <ScrollViewer VerticalScrollBarVisibility="Auto"
-                      Padding="16,12,16,12">
-            <StackPanel>
+        <!-- ── Tab control ───────────────────────────────────────── -->
+        <TabControl>
 
-                <!-- ── TOOL PATHS section ─────────────────────── -->
-                <TextBlock Text="TOOL PATHS"
-                           Style="{StaticResource SectionHeader}"/>
-
-                <Border Background="{DynamicResource SurfaceBg}"
-                        BorderBrush="{DynamicResource BorderColor}"
-                        BorderThickness="1"
-                        CornerRadius="4"
-                        Padding="12,8">
+            <!-- ════════════════════════════════════════════════════
+                 TAB 1 — TOOL PATHS
+                 ════════════════════════════════════════════════════ -->
+            <TabItem Header="Tool Paths">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              Padding="20,16,20,16">
                     <Grid>
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="130"/>  <!-- Label -->
-                            <ColumnDefinition Width="*"/>    <!-- TextBox -->
-                            <ColumnDefinition Width="Auto"/> <!-- Where button -->
-                            <ColumnDefinition Width="Auto"/> <!-- Browse button -->
-                        </Grid.ColumnDefinitions>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="36"/>
-                            <RowDefinition Height="36"/>
-                            <RowDefinition Height="36"/>
-                            <RowDefinition Height="36"/>
-                            <RowDefinition Height="36"/>
-                            <RowDefinition Height="36"/>
-                        </Grid.RowDefinitions>
-
-                        <!-- MPV -->
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="MPV"                Style="{StaticResource PrefLabel}"/>
-                        <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TbxMPV"          VerticalContentAlignment="Center"/>
-                        <Button    Grid.Row="0" Grid.Column="2" Content="Where"           Style="{StaticResource SmallButton}" Click="WhereMPV_Click"/>
-                        <Button    Grid.Row="0" Grid.Column="3" Content="Browse"          Style="{StaticResource SmallButton}" Click="BrowseMPV_Click"/>
-
-                        <!-- SubtitleEdit -->
-                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Subtitle Edit"      Style="{StaticResource PrefLabel}"/>
-                        <TextBox   Grid.Row="1" Grid.Column="1" x:Name="TbxSubtitleEdit"  VerticalContentAlignment="Center"/>
-                        <Button    Grid.Row="1" Grid.Column="2" Content="Where"           Style="{StaticResource SmallButton}" Click="WhereSubtitleEdit_Click"/>
-                        <Button    Grid.Row="1" Grid.Column="3" Content="Browse"          Style="{StaticResource SmallButton}" Click="BrowseSubtitleEdit_Click"/>
-
-                        <!-- ffmpeg -->
-                        <TextBlock Grid.Row="2" Grid.Column="0" Text="ffmpeg"             Style="{StaticResource PrefLabel}"/>
-                        <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TbxFFmpeg"        VerticalContentAlignment="Center"/>
-                        <Button    Grid.Row="2" Grid.Column="2" Content="Where"           Style="{StaticResource SmallButton}" Click="WhereFFmpeg_Click"/>
-                        <Button    Grid.Row="2" Grid.Column="3" Content="Browse"          Style="{StaticResource SmallButton}" Click="BrowseFFmpeg_Click"/>
-
-                        <!-- ffprobe -->
-                        <TextBlock Grid.Row="3" Grid.Column="0" Text="ffprobe"            Style="{StaticResource PrefLabel}"/>
-                        <TextBox   Grid.Row="3" Grid.Column="1" x:Name="TbxFFprobe"       VerticalContentAlignment="Center"/>
-                        <Button    Grid.Row="3" Grid.Column="2" Content="Where"           Style="{StaticResource SmallButton}" Click="WhereFFprobe_Click"/>
-                        <Button    Grid.Row="3" Grid.Column="3" Content="Browse"          Style="{StaticResource SmallButton}" Click="BrowseFFprobe_Click"/>
-
-                        <!-- MKVPropEdit -->
-                        <TextBlock Grid.Row="4" Grid.Column="0" Text="MKVPropEdit"        Style="{StaticResource PrefLabel}"/>
-                        <TextBox   Grid.Row="4" Grid.Column="1" x:Name="TbxMKVPropEdit"   VerticalContentAlignment="Center"/>
-                        <Button    Grid.Row="4" Grid.Column="2" Content="Where"           Style="{StaticResource SmallButton}" Click="WhereMKVPropEdit_Click"/>
-                        <Button    Grid.Row="4" Grid.Column="3" Content="Browse"          Style="{StaticResource SmallButton}" Click="BrowseMKVPropEdit_Click"/>
-
-                        <!-- MKVMerge -->
-                        <TextBlock Grid.Row="5" Grid.Column="0" Text="MKVMerge"           Style="{StaticResource PrefLabel}"/>
-                        <TextBox   Grid.Row="5" Grid.Column="1" x:Name="TbxMKVMerge"      VerticalContentAlignment="Center"/>
-                        <Button    Grid.Row="5" Grid.Column="2" Content="Where"           Style="{StaticResource SmallButton}" Click="WhereMKVMerge_Click"/>
-                        <Button    Grid.Row="5" Grid.Column="3" Content="Browse"          Style="{StaticResource SmallButton}" Click="BrowseMKVMerge_Click"/>
-
-                    </Grid>
-                </Border>
-
-                <!-- ── OPTIONS section ────────────────────────── -->
-                <TextBlock Text="DEFAULT OPTIONS"
-                           Style="{StaticResource SectionHeader}"/>
-
-                <Border Background="{DynamicResource SurfaceBg}"
-                        BorderBrush="{DynamicResource BorderColor}"
-                        BorderThickness="1"
-                        CornerRadius="4"
-                        Padding="12,8">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="180"/>
+                            <ColumnDefinition Width="130"/>
                             <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="36"/>
-                            <RowDefinition Height="36"/>
-                            <RowDefinition Height="36"/>
-                            <RowDefinition Height="36"/>
-                            <RowDefinition Height="36"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="MKVMerge Defaults"        Style="{StaticResource PrefLabel}"/>
-                        <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TbxMKVMergeDefaults"    VerticalContentAlignment="Center"/>
+                        <!-- MPV -->
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="MPV"              Style="{StaticResource PrefLabel}"    Margin="0,10,10,10"/>
+                        <TextBox   Grid.Row="0" Grid.Column="1" x:Name="TbxMPV"         VerticalContentAlignment="Center"     Margin="0,8,0,8"  Padding="6,4"/>
+                        <Button    Grid.Row="0" Grid.Column="2" Content="Where"          Style="{StaticResource SmallButton}"  Margin="6,8,0,8"  Click="WhereMPV_Click"/>
+                        <Button    Grid.Row="0" Grid.Column="3" Content="Browse"         Style="{StaticResource SmallButton}"  Margin="4,8,0,8"  Click="BrowseMPV_Click"/>
 
-                        <TextBlock Grid.Row="1" Grid.Column="0" Text="MKVMerge Options"         Style="{StaticResource PrefLabel}"/>
-                        <TextBox   Grid.Row="1" Grid.Column="1" x:Name="TbxMKVMergeOptions"     VerticalContentAlignment="Center"/>
+                        <!-- Subtitle Edit -->
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Subtitle Edit"     Style="{StaticResource PrefLabel}"    Margin="0,10,10,10"/>
+                        <TextBox   Grid.Row="1" Grid.Column="1" x:Name="TbxSubtitleEdit" VerticalContentAlignment="Center"     Margin="0,8,0,8"  Padding="6,4"/>
+                        <Button    Grid.Row="1" Grid.Column="2" Content="Where"          Style="{StaticResource SmallButton}"  Margin="6,8,0,8"  Click="WhereSubtitleEdit_Click"/>
+                        <Button    Grid.Row="1" Grid.Column="3" Content="Browse"         Style="{StaticResource SmallButton}"  Margin="4,8,0,8"  Click="BrowseSubtitleEdit_Click"/>
 
-                        <TextBlock Grid.Row="2" Grid.Column="0" Text="RoboCopy Defaults"        Style="{StaticResource PrefLabel}"/>
-                        <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TbxRoboCopyDefaults"    VerticalContentAlignment="Center"/>
+                        <!-- ffmpeg -->
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="ffmpeg"            Style="{StaticResource PrefLabel}"    Margin="0,10,10,10"/>
+                        <TextBox   Grid.Row="2" Grid.Column="1" x:Name="TbxFFmpeg"       VerticalContentAlignment="Center"     Margin="0,8,0,8"  Padding="6,4"/>
+                        <Button    Grid.Row="2" Grid.Column="2" Content="Where"          Style="{StaticResource SmallButton}"  Margin="6,8,0,8"  Click="WhereFFmpeg_Click"/>
+                        <Button    Grid.Row="2" Grid.Column="3" Content="Browse"         Style="{StaticResource SmallButton}"  Margin="4,8,0,8"  Click="BrowseFFmpeg_Click"/>
 
-                        <!-- Default NVENC Preset -->
-                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Default NVENC Preset"  Style="{StaticResource PrefLabel}"/>
-                        <ComboBox  Grid.Row="3" Grid.Column="1" x:Name="CbxDefaultPreset"
-                                   VerticalContentAlignment="Center"
-                                   Width="80" HorizontalAlignment="Left">
-                            <sys:String>None</sys:String>
-                            <sys:String>p1</sys:String>
-                            <sys:String>p2</sys:String>
-                            <sys:String>p3</sys:String>
-                            <sys:String>p4</sys:String>
-                            <sys:String>p5</sys:String>
-                            <sys:String>p6</sys:String>
-                            <sys:String>p7</sys:String>
-                        </ComboBox>
+                        <!-- ffprobe -->
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="ffprobe"           Style="{StaticResource PrefLabel}"    Margin="0,10,10,10"/>
+                        <TextBox   Grid.Row="3" Grid.Column="1" x:Name="TbxFFprobe"      VerticalContentAlignment="Center"     Margin="0,8,0,8"  Padding="6,4"/>
+                        <Button    Grid.Row="3" Grid.Column="2" Content="Where"          Style="{StaticResource SmallButton}"  Margin="6,8,0,8"  Click="WhereFFprobe_Click"/>
+                        <Button    Grid.Row="3" Grid.Column="3" Content="Browse"         Style="{StaticResource SmallButton}"  Margin="4,8,0,8"  Click="BrowseFFprobe_Click"/>
 
-                        <!-- NVENC Quality Flags -->
-                        <TextBlock Grid.Row="4" Grid.Column="0" Text="NVENC Quality Flags"      Style="{StaticResource PrefLabel}"/>
-                        <TextBox   Grid.Row="4" Grid.Column="1" x:Name="TbxNvencQualityFlags"   VerticalContentAlignment="Center"/>
+                        <!-- MKVPropEdit -->
+                        <TextBlock Grid.Row="4" Grid.Column="0" Text="MKVPropEdit"       Style="{StaticResource PrefLabel}"    Margin="0,10,10,10"/>
+                        <TextBox   Grid.Row="4" Grid.Column="1" x:Name="TbxMKVPropEdit"  VerticalContentAlignment="Center"     Margin="0,8,0,8"  Padding="6,4"/>
+                        <Button    Grid.Row="4" Grid.Column="2" Content="Where"          Style="{StaticResource SmallButton}"  Margin="6,8,0,8"  Click="WhereMKVPropEdit_Click"/>
+                        <Button    Grid.Row="4" Grid.Column="3" Content="Browse"         Style="{StaticResource SmallButton}"  Margin="4,8,0,8"  Click="BrowseMKVPropEdit_Click"/>
 
-                        <!-- Always Convert to HEVC -->
-                        <StackPanel Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="2"
-                                    Margin="0,8,0,4">
-                            <CheckBox x:Name="ChkAlwaysConvertToHevc"
-                                      Content="Always Convert to HEVC"
-                                      HorizontalAlignment="Left"/>
-                            <TextBlock Text="When checked, files without saved settings will be transcoded using defaults (hevc, preset as configured above, all audio copy). When unchecked, files without saved settings will be robocopied."
-                                       Foreground="{DynamicResource SubtleForeground}"
-                                       FontSize="11"
-                                       TextWrapping="Wrap"
-                                       Margin="22,4,0,0"/>
-                        </StackPanel>
+                        <!-- MKVMerge -->
+                        <TextBlock Grid.Row="5" Grid.Column="0" Text="MKVMerge"          Style="{StaticResource PrefLabel}"    Margin="0,10,10,10"/>
+                        <TextBox   Grid.Row="5" Grid.Column="1" x:Name="TbxMKVMerge"     VerticalContentAlignment="Center"     Margin="0,8,0,8"  Padding="6,4"/>
+                        <Button    Grid.Row="5" Grid.Column="2" Content="Where"          Style="{StaticResource SmallButton}"  Margin="6,8,0,8"  Click="WhereMKVMerge_Click"/>
+                        <Button    Grid.Row="5" Grid.Column="3" Content="Browse"         Style="{StaticResource SmallButton}"  Margin="4,8,0,8"  Click="BrowseMKVMerge_Click"/>
 
                     </Grid>
-                </Border>
+                </ScrollViewer>
+            </TabItem>
 
-
-                <!-- ── GENERAL section ───────────────────────────── -->
-                <TextBlock Text="GENERAL"
-                           Style="{StaticResource SectionHeader}"/>
-
-                <Border Background="{DynamicResource SurfaceBg}"
-                        BorderBrush="{DynamicResource BorderColor}"
-                        BorderThickness="1"
-                        CornerRadius="4"
-                        Padding="12,8">
+            <!-- ════════════════════════════════════════════════════
+                 TAB 2 — ENCODE
+                 GPU vendor selector, then vendor-specific settings
+                 panels (only one visible at a time), then the
+                 Always Convert to HEVC option shared by both.
+                 ════════════════════════════════════════════════════ -->
+            <TabItem Header="Remux">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              Padding="20,16,20,16">
                     <Grid>
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="180"/>
-                            <ColumnDefinition Width="80"/>
+                            <ColumnDefinition Width="160"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="36"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
                         <TextBlock Grid.Row="0" Grid.Column="0"
-                                   Text="Folder History Size"
-                                   Style="{StaticResource PrefLabel}"/>
+                                   Text="MKVMerge Defaults"
+                                   Style="{StaticResource PrefLabel}"  Margin="0,10,10,10"/>
                         <TextBox   Grid.Row="0" Grid.Column="1"
-                                   x:Name="TbxHistorySize"
-                                   VerticalContentAlignment="Center"
-                                   PreviewTextInput="HistorySize_PreviewTextInput"/>
-                        <TextBlock Grid.Row="0" Grid.Column="2"
-                                   Text="(applies to both Input and Output history)"
-                                   Style="{StaticResource PrefLabel}"
-                                   Foreground="{DynamicResource SubtleForeground}"
-                                   FontSize="11"/>
+                                   x:Name="TbxMKVMergeDefaults"
+                                   VerticalContentAlignment="Center"   Margin="0,8,0,8" Padding="6,4"/>
+
+                        <TextBlock Grid.Row="1" Grid.Column="0"
+                                   Text="MKVMerge Options"
+                                   Style="{StaticResource PrefLabel}"  Margin="0,10,10,10"/>
+                        <TextBox   Grid.Row="1" Grid.Column="1"
+                                   x:Name="TbxMKVMergeOptions"
+                                   VerticalContentAlignment="Center"   Margin="0,8,0,8" Padding="6,4"/>
+
+                        <TextBlock Grid.Row="2" Grid.Column="0"
+                                   Text="RoboCopy Defaults"
+                                   Style="{StaticResource PrefLabel}"  Margin="0,10,10,10"/>
+                        <TextBox   Grid.Row="2" Grid.Column="1"
+                                   x:Name="TbxRoboCopyDefaults"
+                                   VerticalContentAlignment="Center"   Margin="0,8,0,8" Padding="6,4"/>
                     </Grid>
-                </Border>
+                </ScrollViewer>
+            </TabItem>
 
-                <!-- ── FILE NAME CORRECTIONS section ─────────────── -->
-                <TextBlock Text="FILE NAME CORRECTIONS"
-                           Style="{StaticResource SectionHeader}"/>
+            <!-- ════════════════════════════════════════════════════
+                 TAB 3 — REMUX
+                 MKVMerge and RoboCopy CLI flag defaults.
+                 ════════════════════════════════════════════════════ -->
+            <TabItem Header="Encode">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              Padding="20,16,20,16">
+                    <StackPanel>
 
-                <Border Background="{DynamicResource SurfaceBg}"
-                        BorderBrush="{DynamicResource BorderColor}"
-                        BorderThickness="1"
-                        CornerRadius="4"
-                        Padding="12,8">
+                        <!-- GPU Vendor row -->
+                        <Grid Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="160"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0"
+                                       Text="GPU Vendor"
+                                       Style="{StaticResource PrefLabel}"/>
+                            <ComboBox  Grid.Column="1"
+                                       x:Name="CbxGpuVendor"
+                                       VerticalContentAlignment="Center"
+                                       Width="110" HorizontalAlignment="Left"
+                                       SelectionChanged="CbxGpuVendor_SelectionChanged">
+                                <sys:String>NVIDIA</sys:String>
+                                <sys:String>Intel</sys:String>
+                            </ComboBox>
+                        </Grid>
+
+                        <Border Height="1" Background="{DynamicResource SeparatorColor}" Margin="0,0,0,16"/>
+
+                        <!-- NVIDIA NVENC panel — visible when vendor = NVIDIA -->
+                        <StackPanel x:Name="PnlNvidia">
+
+                            <TextBlock Text="NVIDIA NVENC"
+                                       Foreground="{DynamicResource SubtleForeground}"
+                                       FontSize="11" FontWeight="SemiBold"
+                                       Margin="0,0,0,10"/>
+
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="160"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Grid.Row="0" Grid.Column="0"
+                                           Text="Default Preset"
+                                           Style="{StaticResource PrefLabel}"  Margin="0,10,10,10"/>
+                                <ComboBox  Grid.Row="0" Grid.Column="1"
+                                           x:Name="CbxDefaultPreset"
+                                           VerticalContentAlignment="Center"
+                                           Width="80" HorizontalAlignment="Left"
+                                           Margin="0,8,0,8">
+                                    <sys:String>None</sys:String>
+                                    <sys:String>p1</sys:String>
+                                    <sys:String>p2</sys:String>
+                                    <sys:String>p3</sys:String>
+                                    <sys:String>p4</sys:String>
+                                    <sys:String>p5</sys:String>
+                                    <sys:String>p6</sys:String>
+                                    <sys:String>p7</sys:String>
+                                </ComboBox>
+
+                                <TextBlock Grid.Row="1" Grid.Column="0"
+                                           Text="Quality Flags"
+                                           Style="{StaticResource PrefLabel}"  Margin="0,10,10,10"/>
+                                <TextBox   Grid.Row="1" Grid.Column="1"
+                                           x:Name="TbxNvencQualityFlags"
+                                           VerticalContentAlignment="Center"   Margin="0,8,0,8" Padding="6,4"/>
+                            </Grid>
+
+                            <TextBlock Style="{StaticResource HintText}"
+                                       Margin="0,6,0,0"
+                                       Text="p5 / -cq 19 -spatial-aq 1 -aq-strength 10 are confirmed optimal. p1 = fastest, p7 = slowest/highest quality. None omits -preset entirely."/>
+                        </StackPanel>
+
+                        <!-- Intel QSV panel — visible when vendor = Intel -->
+                        <StackPanel x:Name="PnlIntel" Visibility="Collapsed">
+
+                            <TextBlock Text="Intel Quick Sync Video (QSV)"
+                                       Foreground="{DynamicResource SubtleForeground}"
+                                       FontSize="11" FontWeight="SemiBold"
+                                       Margin="0,0,0,10"/>
+
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="160"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Grid.Row="0" Grid.Column="0"
+                                           Text="Default Preset"
+                                           Style="{StaticResource PrefLabel}"  Margin="0,10,10,10"/>
+                                <ComboBox  Grid.Row="0" Grid.Column="1"
+                                           x:Name="CbxQsvDefaultPreset"
+                                           VerticalContentAlignment="Center"
+                                           Width="100" HorizontalAlignment="Left"
+                                           SelectedIndex="3"
+                                           Margin="0,8,0,8">
+                                    <sys:String>veryfast</sys:String>
+                                    <sys:String>faster</sys:String>
+                                    <sys:String>fast</sys:String>
+                                    <sys:String>medium</sys:String>
+                                    <sys:String>slow</sys:String>
+                                    <sys:String>slower</sys:String>
+                                    <sys:String>veryslow</sys:String>
+                                </ComboBox>
+
+                                <TextBlock Grid.Row="1" Grid.Column="0"
+                                           Text="Quality Flags"
+                                           Style="{StaticResource PrefLabel}"  Margin="0,10,10,10"/>
+                                <TextBox   Grid.Row="1" Grid.Column="1"
+                                           x:Name="TbxQsvQualityFlags"
+                                           VerticalContentAlignment="Center"   Margin="0,8,0,8" Padding="6,4"/>
+                            </Grid>
+
+                            <TextBlock Style="{StaticResource HintText}"
+                                       Margin="0,6,0,0"
+                                       Text="medium / -global_quality 23 -scenario 3 -mbbrc 1 -rdo 1 -adaptive_i 1 -adaptive_b 1 recommended. Lower quality value = better quality. -look_ahead_depth requires -extbrc 1 and is optional (hevc_qsv only via extbrc; h264_qsv has native -look_ahead)."/>
+                        </StackPanel>
+
+                        <Border Height="1" Background="{DynamicResource SeparatorColor}" Margin="0,16,0,16"/>
+
+                        <!-- Always Convert to HEVC — shared by both vendors -->
+                        <CheckBox x:Name="ChkAlwaysConvertToHevc"
+                                  Content="Always Convert to HEVC"
+                                  HorizontalAlignment="Left"
+                                  Margin="0,0,0,4"/>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="When checked, files without saved settings are transcoded using the defaults above (HEVC output, all audio copied). When unchecked, files without saved settings are robocopied."/>
+
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- ════════════════════════════════════════════════════
+                 TAB 4 — FILE NAMES
+                 Title case correction and resolution append.
+                 ════════════════════════════════════════════════════ -->
+            <TabItem Header="File Names">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              Padding="20,16,20,16">
                     <StackPanel>
 
                         <!-- Title Case -->
                         <CheckBox x:Name="ChkTitleCase"
                                   Content="Auto Title Case on Folder Load"
                                   HorizontalAlignment="Left"
-                                  Margin="0,4,0,4"/>
-                        <TextBlock Text="Corrects folder and file display names to Title Case on load. A confirmation dialog lets you review and selectively apply changes."
-                                   Foreground="{DynamicResource SubtleForeground}"
-                                   FontSize="11"
-                                   TextWrapping="Wrap"
-                                   Margin="22,0,0,8"/>
+                                  Margin="0,0,0,4"/>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="Corrects folder and file display names to Title Case on load. A confirmation dialog lets you review and selectively apply each rename."/>
 
-                        <TextBlock Text="Acronym List (comma-separated, e.g. HDR,UHD,IMAX):"
+                        <TextBlock Text="Acronym List (comma-separated):"
                                    Foreground="{DynamicResource ForegroundColor}"
                                    FontSize="12"
                                    Margin="22,0,0,4"/>
                         <TextBox x:Name="TbxAcronyms"
-                                 Margin="22,0,0,12"
+                                 Margin="22,0,0,4"
                                  VerticalContentAlignment="Center"/>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Margin="22,0,0,16"
+                                   Text="Terms that remain fully uppercase (e.g. HDR, UHD, IMAX, DTS)."/>
+
+                        <Border Height="1" Background="{DynamicResource SeparatorColor}" Margin="0,0,0,16"/>
 
                         <!-- Resolution Append -->
                         <CheckBox x:Name="ChkResolutionAppend"
                                   Content="Auto-Append Resolution to Movie Filenames"
                                   HorizontalAlignment="Left"
-                                  Margin="0,4,0,4"/>
-                        <TextBlock Text="Probes movie files with ffprobe on folder load and appends resolution label (e.g. -1080p) to filenames that lack one. Movies only — not TV."
-                                   Foreground="{DynamicResource SubtleForeground}"
-                                   FontSize="11"
-                                   TextWrapping="Wrap"
-                                   Margin="22,0,0,4"/>
+                                  Margin="0,0,0,4"/>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="Probes movie files with ffprobe on folder load and appends a resolution label (e.g. -1080p, -2160p) to filenames that lack one. Movies only — TV episodes are skipped."/>
 
                         <CheckBox x:Name="ChkResolutionVerifyAlways"
+                                  Content="Always verify resolution via ffprobe (slower)"
                                   HorizontalAlignment="Left"
-                                  Content="Verify resolution of all files via ffprobe (slower — probes all files including those with existing resolution suffix)"
-                                  Margin="22,4,0,8"
-                                  Foreground="{DynamicResource SubtleForeground}"
-                                  FontSize="11"/>
+                                  Margin="22,0,0,4"/>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Margin="44,0,0,0"
+                                   Text="Probes all files including those that already have a resolution suffix, to confirm the label is correct."/>
 
                     </StackPanel>
-                </Border>
+                </ScrollViewer>
+            </TabItem>
 
-                <!-- ── RUN section ───────────────────────────────────── -->
-                <TextBlock Text="RUN"
-                           Style="{StaticResource SectionHeader}"/>
-
-                <Border Background="{DynamicResource SurfaceBg}"
-                        BorderBrush="{DynamicResource BorderColor}"
-                        BorderThickness="1"
-                        CornerRadius="4"
-                        Padding="12,8">
+            <!-- ════════════════════════════════════════════════════
+                 TAB 5 — RUN
+                 Logging, auto-move, folder history size.
+                 ════════════════════════════════════════════════════ -->
+            <TabItem Header="Logging">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              Padding="20,16,20,16">
                     <StackPanel>
 
                         <!-- Write Log Files -->
                         <CheckBox x:Name="ChkWriteLogFiles"
                                   Content="Write Log Files"
                                   HorizontalAlignment="Left"
-                                  Margin="0,4,0,4"
+                                  Margin="0,0,0,4"
                                   Checked="ChkWriteLogFiles_Changed"
                                   Unchecked="ChkWriteLogFiles_Changed"/>
-                        <TextBlock Text="Writes a log file per processed file to &lt;OutputDirectory&gt;\Logs\&lt;timestamp&gt;\. Failed files are named with a -FAILED suffix."
-                                   Foreground="{DynamicResource SubtleForeground}"
-                                   FontSize="11"
-                                   TextWrapping="Wrap"
-                                   Margin="22,0,0,8"/>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="Writes a log file per processed file to &lt;OutputDirectory&gt;\Logs\&lt;timestamp&gt;\. Failed files are named with a -FAILED suffix."/>
 
-                        <!-- Verbose Logging — indented under Write Log Files -->
+                        <!-- Verbose Logging — child of Write Log Files -->
                         <CheckBox x:Name="ChkVerboseLogging"
                                   Content="Verbose Logging"
                                   HorizontalAlignment="Left"
-                                  Margin="22,4,0,4"
                                   IsEnabled="False"
+                                  Margin="22,0,0,4"
                                   Checked="ChkVerboseLogging_Changed"
                                   Unchecked="ChkVerboseLogging_Changed"/>
-                        <TextBlock Text="When enabled, ffmpeg output is redirected to the log file at the selected log level. The Run window shows an indeterminate progress bar instead of stats."
-                                   Foreground="{DynamicResource SubtleForeground}"
-                                   FontSize="11"
-                                   TextWrapping="Wrap"
-                                   Margin="44,0,0,8"/>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Margin="44,0,0,0"
+                                   Text="Redirects all ffmpeg output to the log file. The Run window shows an animated progress ticker instead of live stats."/>
 
                         <!-- ffmpeg Log Level -->
-                        <StackPanel Orientation="Horizontal" Margin="22,0,0,8">
+                        <StackPanel Orientation="Horizontal" Margin="22,4,0,16">
                             <TextBlock Text="ffmpeg Log Level:"
                                        Style="{StaticResource PrefLabel}"
                                        VerticalAlignment="Center"/>
@@ -347,23 +420,40 @@
                             </ComboBox>
                         </StackPanel>
 
-                        <!-- Disable automatic move of completed folders -->
+                        <Border Height="1" Background="{DynamicResource SeparatorColor}" Margin="0,0,0,16"/>
+
+                        <!-- Auto-move -->
                         <CheckBox x:Name="ChkAutoMoveCompleted"
                                   Content="Disable automatic move of completed folders"
                                   HorizontalAlignment="Left"
-                                  Margin="0,8,0,4"
+                                  Margin="0,0,0,4"
                                   Checked="ChkAutoMoveCompleted_Changed"
                                   Unchecked="ChkAutoMoveCompleted_Changed"/>
-                        <TextBlock Text="When checked, completed output folders will not be automatically moved to a Completed\ subfolder after a run. By default, folders whose files all succeeded are moved automatically."
-                                   Foreground="{DynamicResource SubtleForeground}"
-                                   FontSize="11"
-                                   TextWrapping="Wrap"
-                                   Margin="22,0,0,8"/>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="By default, output folders whose files all succeeded are moved to a Completed\ subfolder after each run. Check this to disable that behaviour."/>
+
+                        <Border Height="1" Background="{DynamicResource SeparatorColor}" Margin="0,0,0,16"/>
+
+                        <!-- Folder History Size -->
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Folder History Size:"
+                                       Style="{StaticResource PrefLabel}"
+                                       VerticalAlignment="Center"/>
+                            <TextBox x:Name="TbxHistorySize"
+                                     Width="50"
+                                     VerticalContentAlignment="Center"
+                                     PreviewTextInput="HistorySize_PreviewTextInput"/>
+                            <TextBlock Text="entries  (Input and Output dropdowns)"
+                                       Foreground="{DynamicResource SubtleForeground}"
+                                       FontSize="11"
+                                       VerticalAlignment="Center"
+                                       Margin="10,0,0,0"/>
+                        </StackPanel>
 
                     </StackPanel>
-                </Border>
+                </ScrollViewer>
+            </TabItem>
 
-            </StackPanel>
-        </ScrollViewer>
+        </TabControl>
     </DockPanel>
 </Window>
