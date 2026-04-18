@@ -316,13 +316,16 @@ public static class CommandBuilder
             };
         }
 
-        // ── Determine whether 10-bit conversion is needed ─────────────
+        // ── Determine whether 10-bit promotion is needed ──────────────
         // Only relevant when output is HEVC. If the source pixel format already
         // contains "10" (e.g. yuv420p10le) it is already 10-bit and no
-        // conversion is needed. 8-bit sources (e.g. yuv420p) need conversion.
+        // promotion is needed. 8-bit sources (e.g. yuv420p) need promotion.
         //
-        // NVENC path: -highbitdepth true + scale_cuda=format=p010le
-        // QSV path:   scale_qsv=format=p010le  (-highbitdepth is NVENC-only)
+        // NVENC path: -highbitdepth true + scale_cuda=format=p010le filter
+        // QSV path:   vpp_qsv=format=p010le:out_range=tv
+        //             vpp_qsv is the proper oneVPL VPP filter with documented
+        //             out_range support — unlike scale_qsv which has no range
+        //             control and expands limited-range input to full-range.
         var sourcePixFmt  = video?.PixelFormat?.ToLowerInvariant() ?? "";
         var sourceIs10bit = sourcePixFmt.Contains("10");
         var needs10bit    = useHevc && !sourceIs10bit;
@@ -412,9 +415,7 @@ public static class CommandBuilder
         }
 
         // ── Video filter chain ────────────────────────────────────────
-        // Filters are vendor-specific because QSV and CUDA use different
-        // hardware filter implementations, but the logic deciding WHICH
-        // filters are needed is identical.
+        // Filters are vendor-specific.
         //
         // NVENC filters:
         //   yadif_cuda=mode=1           — GPU deinterlace
@@ -422,28 +423,58 @@ public static class CommandBuilder
         //   -highbitdepth true          — encoder flag paired with scale_cuda
         //
         // QSV filters:
-        //   deinterlace_qsv             — GPU deinterlace (no mode arg needed;
-        //                                 QSV deinterlace always outputs one
-        //                                 frame per input field pair)
-        //   scale_qsv=format=p010le     — 8-bit→10-bit on QSV surface
-        //   (-highbitdepth is NVENC-only — not used in QSV path)
+        //   vpp_qsv                     — oneVPL Video Processing Pipeline
+        //   This single filter handles both deinterlace and format conversion
+        //   with proper range control via out_range=tv. scale_qsv is NOT used
+        //   as it has no range parameter and expands limited-range input to
+        //   full-range during pixel format conversion.
         //
-        // Order matters: deinterlace must come before pixel format conversion.
+        //   format=p010le               — 8-bit→10-bit promotion (needs10bit only)
+        //   out_range=tv                — preserve limited range (16-235/64-940)
+        //                                 through the format conversion
+        //   deinterlace=2               — advanced deinterlace (isInterlaced only)
+        //
+        // Order matters for NVENC: deinterlace must come before format conversion.
+        // vpp_qsv handles both in a single filter pass so ordering is not an issue.
         var isInterlaced = video?.IsInterlaced ?? false;
 
-        if (isInterlaced || needs10bit)
+        if (useIntel && (isInterlaced || needs10bit))
         {
-            // -highbitdepth is NVENC-only — not applicable for QSV
-            if (needs10bit && !useIntel)
+            // Build vpp_qsv filter — combine deinterlace and/or format conversion
+            // into a single filter pass with explicit limited-range output.
+            var vppParts = new List<string>();
+
+            if (needs10bit)
+                vppParts.Add("format=p010le");
+
+            // out_range=tv ensures limited-range pixel values are preserved
+            // through the VPP conversion. Always emit for QSV to be safe.
+            vppParts.Add("out_range=tv");
+
+            // scale_mode=hq: use the high quality VPP processing path.
+            // Default is auto which resolves to low_power, producing visibly
+            // softer output during format conversion.
+            vppParts.Add("scale_mode=hq");
+
+            if (isInterlaced)
+                vppParts.Add("deinterlace=2");
+
+            sb.Append($" -filter:v vpp_qsv={string.Join(":", vppParts)}");
+        }
+        else if (!useIntel && (isInterlaced || needs10bit))
+        {
+            // NVENC path: deinterlace and/or 8-bit→10-bit conversion via filters.
+            // -highbitdepth is NVENC-only — not applicable for QSV.
+            if (needs10bit)
                 sb.Append(" -highbitdepth true");
 
             var filterParts = new List<string>();
 
             if (isInterlaced)
-                filterParts.Add(useIntel ? "deinterlace_qsv" : "yadif_cuda=mode=1");
+                filterParts.Add("yadif_cuda=mode=1");
 
             if (needs10bit)
-                filterParts.Add(useIntel ? "scale_qsv=format=p010le" : "scale_cuda=format=p010le");
+                filterParts.Add("scale_cuda=format=p010le");
 
             sb.Append($" -filter:v {string.Join(",", filterParts)}");
         }
