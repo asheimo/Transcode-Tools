@@ -113,6 +113,206 @@ public partial class RunRemux : Window
         PopulateFolderTree();
     }
 
+    // ── Output folder completion check ────────────────────────────────
+    // Called after PopulateFolderTree() to async-check which folders/files
+    // already exist in the output directory. Appends a green ✓ to any
+    // folder where every input .mkv has a matching output file, and to
+    // each individual file that already exists (when Show Files is on).
+    //
+    // Runs entirely on a background thread — only the final UI updates
+    // marshal back via Dispatcher. The window opens instantly; checkmarks
+    // appear within a second or two even on network paths.
+    //
+    // Called with fire-and-forget (_ = CheckOutputFolderAsync()) so it
+    // doesn't block the UI thread. A CancellationToken lets a subsequent
+    // PopulateFolderTree() call (e.g. Show Files toggle) abort any
+    // in-progress scan before starting a new one.
+    private CancellationTokenSource? _outputCheckCts;
+
+    private void StartOutputCheck()
+    {
+        // Cancel any previous scan that's still running
+        _outputCheckCts?.Cancel();
+        _outputCheckCts = new CancellationTokenSource();
+        _ = CheckOutputFolderAsync(_outputCheckCts.Token);
+    }
+
+    private async Task CheckOutputFolderAsync(CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(_outputDirectory) ||
+            !Directory.Exists(_outputDirectory)) return;
+
+        var showFiles = await Dispatcher.InvokeAsync(() => ShowFilesCheckBox.IsChecked == true);
+
+        // Snapshot the tree nodes we need to check — on the UI thread,
+        // before we go async. We collect (node, inputRelativePath) pairs.
+        var folderChecks = new List<(TreeViewItem treeItem, string relPath, bool hasFileChildren)>();
+
+        await Dispatcher.InvokeAsync(() =>
+        {
+            foreach (TreeViewItem topItem in FolderTree.Items)
+            {
+                if (topItem.Header is CheckBox)
+                {
+                    // Movie — single selectable node
+                    if (topItem.Tag is RunFolderNode node)
+                        folderChecks.Add((topItem, node.FolderName, topItem.Items.Count > 0 && showFiles));
+                }
+                else
+                {
+                    // TV show — iterate season children
+                    foreach (TreeViewItem seasonItem in topItem.Items)
+                    {
+                        if (seasonItem.Tag is RunFolderNode sNode)
+                            folderChecks.Add((seasonItem, sNode.FolderName, seasonItem.Items.Count > 0 && showFiles));
+                    }
+                }
+            }
+        });
+
+        if (ct.IsCancellationRequested) return;
+
+        // For each folder: check on a background thread, update UI after
+        foreach (var (treeItem, relPath, hasFileChildren) in folderChecks)
+        {
+            if (ct.IsCancellationRequested) return;
+
+            var inputFolder  = Path.Combine(_inputDirectory,  relPath);
+            var outputFolder = Path.Combine(_outputDirectory, relPath);
+
+            // ── Background work: collect file name sets ───────────────
+            HashSet<string>? outputFiles = null;
+            string[]?        inputMkvs   = null;
+
+            await Task.Run(() =>
+            {
+                try
+                {
+                    inputMkvs = Directory.GetFiles(inputFolder, "*.mkv")
+                        .Select(Path.GetFileName)
+                        .Where(f => f != null)
+                        .Select(f => f!)
+                        .ToArray();
+                }
+                catch { inputMkvs = Array.Empty<string>(); }
+
+                if (Directory.Exists(outputFolder))
+                {
+                    try
+                    {
+                        outputFiles = new HashSet<string>(
+                            Directory.GetFiles(outputFolder, "*.mkv")
+                                .Select(Path.GetFileName)
+                                .Where(f => f != null)
+                                .Select(f => f!),
+                            StringComparer.OrdinalIgnoreCase);
+                    }
+                    catch { outputFiles = new HashSet<string>(); }
+                }
+                else
+                {
+                    outputFiles = new HashSet<string>();
+                }
+            }, ct);
+
+            if (ct.IsCancellationRequested) return;
+            if (inputMkvs == null || outputFiles == null) continue;
+
+            var allPresent = inputMkvs.Length > 0 &&
+                             inputMkvs.All(f => outputFiles.Contains(f));
+
+            // ── Update folder checkbox label ──────────────────────────
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (ct.IsCancellationRequested) return;
+                SetFolderCheckmark(treeItem, allPresent);
+
+                // ── Update individual file children (Show Files mode) ──
+                if (!hasFileChildren) return;
+                foreach (TreeViewItem fileItem in treeItem.Items)
+                {
+                    if (fileItem.Tag is RunFileNode fileNode)
+                    {
+                        var exists = outputFiles!.Contains(fileNode.FileName);
+                        SetFileCheckmark(fileItem, exists);
+                    }
+                }
+            });
+        }
+    }
+
+    // Appends or removes the ✓ suffix on a folder's CheckBox content.
+    // The CheckBox Content is a plain string — we swap it in place.
+    private static void SetFolderCheckmark(TreeViewItem treeItem, bool complete)
+    {
+        if (treeItem.Header is not CheckBox cb) return;
+
+        // Extract raw text regardless of whether Content is already a StackPanel
+        var text = cb.Content is string s ? s
+                 : cb.Content is StackPanel sp && sp.Children.Count > 0 &&
+                   sp.Children[0] is TextBlock tb ? tb.Text
+                 : (cb.Content as string) ?? "";
+
+        if (text.EndsWith(" \u2713")) text = text[..^2];
+
+        // Build a StackPanel so only the \u2713 is amber — folder name stays default colour
+        if (complete)
+        {
+            var panel = new StackPanel { Orientation = Orientation.Horizontal };
+            panel.Children.Add(new TextBlock
+            {
+                Text       = text,
+                Foreground = (Brush)Application.Current.FindResource("ForegroundColor")
+            });
+            panel.Children.Add(new TextBlock
+            {
+                Text       = " \u2713",
+                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FFE08A"))
+            });
+            cb.Content = panel;
+        }
+        else
+        {
+            cb.Content    = text;
+            cb.Foreground = (Brush)Application.Current.FindResource("ForegroundColor");
+        }
+    }
+
+    // Appends or removes the amber \u2713 suffix on a file's CheckBox content.
+    private static void SetFileCheckmark(TreeViewItem fileItem, bool exists)
+    {
+        if (fileItem.Header is not CheckBox cb) return;
+
+        // Extract raw text regardless of whether Content is already a StackPanel
+        var text = cb.Content is string s2 ? s2
+                 : cb.Content is StackPanel sp2 && sp2.Children.Count > 0 &&
+                   sp2.Children[0] is TextBlock tb2 ? tb2.Text
+                 : (cb.Content as string) ?? "";
+
+        if (text.EndsWith(" \u2713")) text = text[..^2];
+
+        if (exists)
+        {
+            var panel = new StackPanel { Orientation = Orientation.Horizontal };
+            panel.Children.Add(new TextBlock
+            {
+                Text       = text,
+                Foreground = (Brush)Application.Current.FindResource("ForegroundColor")
+            });
+            panel.Children.Add(new TextBlock
+            {
+                Text       = " \u2713",
+                Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FFE08A"))
+            });
+            cb.Content = panel;
+        }
+        else
+        {
+            cb.Content    = text;
+            cb.Foreground = (Brush)Application.Current.FindResource("ForegroundColor");
+        }
+    }
+
     // ── Populate the TreeView ─────────────────────────────────────────
     // Movies appear as single checkbox nodes.
     // TV shows appear as expandable nodes with season children.
@@ -190,6 +390,10 @@ public partial class RunRemux : Window
         {
             AppendLog($"Error reading input directory: {ex.Message}");
         }
+
+        // Async background check — appends ✓ to folders/files already in output.
+        // Fire-and-forget; any previous scan is cancelled before starting a new one.
+        StartOutputCheck();
     }
 
     // Builds a TreeViewItem for a selectable folder (movie or TV season).
@@ -568,6 +772,10 @@ public partial class RunRemux : Window
         CancelCloseBtn.Content      = "Close";
         CancelCloseBtn.IsEnabled    = true;
         ShowFilesCheckBox.IsEnabled = true;
+
+        // Re-run the output check so folders completed in this run
+        // get their ✓ checkmarks without needing to reopen the window.
+        StartOutputCheck();
     }
 
     // ── Build folder node map ─────────────────────────────────────────

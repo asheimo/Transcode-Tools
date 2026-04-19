@@ -233,6 +233,11 @@ public partial class MainWindow : Window
     private static readonly Regex ResolutionSuffix =
         new(@"-(4K|2160p|1080p|720p|480p|576p)$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    // Regex to detect TV episode naming: S01E01, S01E01E02, etc.
+    // Used to skip episode files from title case correction.
+    private static readonly Regex EpisodePattern =
+        new(@"\bS\d{2}E\d{2}\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private void LoadMovieFolders(string rootPath)
     {
         FolderList.Items.Clear();
@@ -310,8 +315,15 @@ public partial class MainWindow : Window
         // Title case runs first so the resolution suffix (e.g. -1080p) is
         // never passed through ToTitleCase and mangled to -1080P.
         // Both features are remux-only — transcode assumes folder names are correct.
-        if (!_isTranscodeMode && AppSettings.Instance.TitleCaseEnabled && movieNodes.Count > 0)
-            ApplyTitleCaseCorrections(rootPath, movieNodes);
+        if (!_isTranscodeMode && AppSettings.Instance.TitleCaseEnabled)
+        {
+            if (movieNodes.Count > 0)
+                ApplyTitleCaseCorrections(rootPath, movieNodes);
+
+            // Silently fix subfolder names (extras, featurettes, etc.) under
+            // any folder that has subfolders. No dialog — applied automatically.
+            ApplySubfolderTitleCase(rootPath);
+        }
 
         if (!_isTranscodeMode && AppSettings.Instance.ResolutionAppendEnabled && movieNodes.Count > 0)
             ApplyResolutionAppendAsync(rootPath, movieNodes);
@@ -343,6 +355,162 @@ public partial class MainWindow : Window
 
         // Show summary dialog — user can uncheck items they don't want renamed
         ShowTitleCaseSummaryDialog(rootPath, proposals);
+    }
+
+    // Silently applies title case to all subfolders under any top-level folder
+    // that has subfolders (movie extras, featurettes, etc.).
+    // Also renames the .mkv file inside each subfolder if it matches the old
+    // subfolder name, and updates any matching .txt settings files.
+    // No dialog — runs automatically on folder load.
+    private void ApplySubfolderTitleCase(string rootPath)
+    {
+        var ti       = new CultureInfo("en-US").TextInfo;
+        var acronyms = AppSettings.Instance.TitleCaseAcronyms;
+
+        var topFolders = Directory.GetDirectories(rootPath)
+            .Where(p =>
+            {
+                var n = Path.GetFileName(p);
+                return n != null &&
+                       !n.Equals("Remux",     StringComparison.OrdinalIgnoreCase) &&
+                       !n.Equals("Transcode", StringComparison.OrdinalIgnoreCase) &&
+                       !n.Equals("Logs",      StringComparison.OrdinalIgnoreCase) &&
+                       !n.Equals("Completed", StringComparison.OrdinalIgnoreCase);
+            });
+
+        foreach (var topPath in topFolders)
+        {
+            var topName    = Path.GetFileName(topPath);
+            if (topName == null) continue;
+
+            var subFolders = Directory.GetDirectories(topPath);
+            if (subFolders.Length == 0) continue; // movie without extras — skip
+
+            foreach (var subPath in subFolders)
+            {
+                var oldName = Path.GetFileName(subPath);
+                if (oldName == null) continue;
+
+                var newName = ApplyTitleCaseToFolderName(oldName, ti, acronyms);
+                if (newName.Equals(oldName, StringComparison.Ordinal)) continue;
+
+                var oldPath = subPath;
+                var newPath = Path.Combine(topPath, newName);
+
+                // Skip if destination already exists and is not a case-only rename
+                if (Directory.Exists(newPath) &&
+                    !oldPath.Equals(newPath, StringComparison.OrdinalIgnoreCase)) continue;
+
+                try
+                {
+                    // Two-step rename for case-only changes (Windows case-insensitive FS)
+                    if (oldPath.Equals(newPath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        var tempPath = newPath + "_tmp_rename_";
+                        Directory.Move(oldPath, tempPath);
+                        Directory.Move(tempPath, newPath);
+                    }
+                    else
+                    {
+                        Directory.Move(oldPath, newPath);
+                    }
+                }
+                catch { continue; /* Best effort — skip subfolders we can't rename */ }
+
+                // ── Rename matching .mkv inside the subfolder ─────────────
+                // Plex expects the file to match the folder name.
+                // Only rename if the file's base name matches the OLD folder name.
+                var oldNameNoExt = Path.GetFileNameWithoutExtension(oldName);
+                var newNameNoExt = Path.GetFileNameWithoutExtension(newName);
+                var oldMkv       = Path.Combine(newPath, oldNameNoExt + ".mkv");
+                var newMkv       = Path.Combine(newPath, newNameNoExt + ".mkv");
+
+                if (File.Exists(oldMkv) &&
+                    !oldMkv.Equals(newMkv, StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        if (oldMkv.Equals(newMkv, StringComparison.OrdinalIgnoreCase))
+                        {
+                            var tempMkv = newMkv + "_tmp_rename_";
+                            File.Move(oldMkv, tempMkv);
+                            File.Move(tempMkv, newMkv);
+                        }
+                        else
+                        {
+                            File.Move(oldMkv, newMkv);
+                        }
+
+                        // Also rename matching .txt settings files
+                        RenameSettingsFiles(rootPath,
+                            Path.Combine(topName, newName),
+                            oldNameNoExt + ".mkv",
+                            newNameNoExt + ".mkv");
+                    }
+                    catch { /* Best effort */ }
+                }
+            }
+        }
+    }
+
+    // Silently applies title case to .mkv filenames within a folder on selection.
+    // Skips:
+    //   - The main title file (no category suffix) in movie folders
+    //   - Episode files matching S##E## pattern
+    // Renames matching .txt settings files via RenameSettingsFiles.
+    private void ApplyFileTitleCase(string fullFolderPath, string folderPath, bool isTvSeason)
+    {
+        var ti       = new CultureInfo("en-US").TextInfo;
+        var acronyms = AppSettings.Instance.TitleCaseAcronyms;
+        var rootPath = _inputDirectory;
+
+        string[] files;
+        try { files = Directory.GetFiles(fullFolderPath, "*.mkv"); }
+        catch { return; }
+
+        foreach (var filePath in files)
+        {
+            var fileName  = Path.GetFileName(filePath);
+            var nameNoExt = Path.GetFileNameWithoutExtension(fileName);
+
+            // Detect category suffix (last dash split)
+            var lastDash = nameNoExt.LastIndexOf('-');
+            var hasCategory = lastDash > 0 &&
+                              KnownCategories.Contains(nameNoExt.Substring(lastDash + 1));
+
+            // Skip main title files in movie folders (no category = main title)
+            if (!isTvSeason && !hasCategory) continue;
+
+            // Skip TV episode files (S01E01 pattern)
+            if (EpisodePattern.IsMatch(nameNoExt)) continue;
+
+            var newNameNoExt = ApplyTitleCaseToFolderName(nameNoExt, ti, acronyms);
+            if (newNameNoExt.Equals(nameNoExt, StringComparison.Ordinal)) continue;
+
+            var newFileName = newNameNoExt + ".mkv";
+            var newFilePath = Path.Combine(fullFolderPath, newFileName);
+
+            // Skip if destination already exists and isn't a case-only rename
+            if (File.Exists(newFilePath) &&
+                !filePath.Equals(newFilePath, StringComparison.OrdinalIgnoreCase)) continue;
+
+            try
+            {
+                if (filePath.Equals(newFilePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    var tempPath = newFilePath + "_tmp_rename_";
+                    File.Move(filePath, tempPath);
+                    File.Move(tempPath, newFilePath);
+                }
+                else
+                {
+                    File.Move(filePath, newFilePath);
+                }
+
+                RenameSettingsFiles(rootPath, folderPath, fileName, newFileName);
+            }
+            catch { /* Best effort — skip files we can't rename */ }
+        }
     }
 
     // Applies ToTitleCase to the title portion of a folder name.
@@ -727,6 +895,11 @@ public partial class MainWindow : Window
         HideSelectedFileBar();
 
         var fullFolderPath = Path.Combine(_inputDirectory, folderPath);
+
+        // Silently apply title case to extra/featurette/deleted .mkv files
+        // before building the tree so the corrected names are displayed.
+        if (!_isTranscodeMode && AppSettings.Instance.TitleCaseEnabled)
+            ApplyFileTitleCase(fullFolderPath, folderPath, isTvSeason);
 
         try
         {
