@@ -113,6 +113,11 @@ public sealed class AppSettings
     //   mode requires a preset). DefaultPreset should be "medium" for QSV.
     public string QsvQualityFlags { get; set; } = "-global_quality 23 -scenario 3 -mbbrc 1 -rdo 1 -adaptive_i 1 -adaptive_b 1";
 
+    // ── Sub-row default bit rate ─────────────────────────────────────
+    // Applied when a new derived lossy sub-row is created via the + button
+    // or restored from a settings file that has no explicit bitrate saved.
+    public string SubRowDefaultBitRate { get; set; } = "640";
+
     // ── File Name Corrections ───────────────────────────────────────
     // Title Case: auto-corrects display names on folder load.
     // Acronym list prevents known uppercase terms being mangled by ToTitleCase.

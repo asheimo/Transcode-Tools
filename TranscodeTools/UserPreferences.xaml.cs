@@ -45,6 +45,7 @@ public partial class UserPreferences : Window
         string DefaultPreset,
         string NvencQualityFlags,
         string QsvQualityFlags,
+        string SubRowDefaultBitRate,
         int    RecentFolderHistorySize,
         string TitleCaseAcronyms,
         bool   TitleCaseEnabled,
@@ -81,6 +82,7 @@ public partial class UserPreferences : Window
             s.DefaultPreset,
             s.NvencQualityFlags,
             s.QsvQualityFlags,
+            s.SubRowDefaultBitRate,
             s.RecentFolderHistorySize,
             string.Join(",", s.TitleCaseAcronyms),
             s.TitleCaseEnabled,
@@ -140,6 +142,8 @@ public partial class UserPreferences : Window
 
         TbxNvencQualityFlags.Text      = s.NvencQualityFlags;
         TbxQsvQualityFlags.Text        = s.QsvQualityFlags;
+        CbxSubRowDefaultBitRate.SelectedItem = s.SubRowDefaultBitRate;
+        if (CbxSubRowDefaultBitRate.SelectedItem == null) CbxSubRowDefaultBitRate.SelectedIndex = 2; // 640
         ChkAlwaysConvertToHevc.IsChecked = s.AlwaysConvertToHevc;
 
         // Remux tab
@@ -191,6 +195,7 @@ public partial class UserPreferences : Window
 
         s.NvencQualityFlags     = TbxNvencQualityFlags.Text;
         s.QsvQualityFlags       = TbxQsvQualityFlags.Text;
+        s.SubRowDefaultBitRate  = CbxSubRowDefaultBitRate.SelectedItem as string ?? "640";
         s.AlwaysConvertToHevc   = ChkAlwaysConvertToHevc.IsChecked == true;
 
         // Remux
@@ -258,6 +263,7 @@ public partial class UserPreferences : Window
         s.DefaultPreset           = _snapshot.DefaultPreset;
         s.NvencQualityFlags       = _snapshot.NvencQualityFlags;
         s.QsvQualityFlags         = _snapshot.QsvQualityFlags;
+        s.SubRowDefaultBitRate    = _snapshot.SubRowDefaultBitRate;
         s.RecentFolderHistorySize = _snapshot.RecentFolderHistorySize;
         s.TitleCaseEnabled        = _snapshot.TitleCaseEnabled;
         s.TitleCaseAcronyms       = _snapshot.TitleCaseAcronyms

@@ -1281,15 +1281,25 @@ public partial class MainWindow : Window
                 video.Preset = tokens[presetIndex + 1];
         }
 
-        // ── Audio: Format, BitRate, and Width ─────────────────────────
-        // Scan for -c:a:N <codec>, -b:a:N <value>, and -ac:a:N <count> tokens.
-        // N is the 0-based audio index matching the collection order.
-        var audioFormats  = new Dictionary<int, string>();
-        var audioBitrates = new Dictionary<int, string>();
-        var audioWidths   = new Dictionary<int, string>();
+        // ── Audio: Format, BitRate, Width, and sub-row restore ────────
+        // Scan for -map 0:a:N, -c:a:N, -b:a:N, and -ac:a:N tokens.
+        // mapSourceIndexes records the source audio index for each output
+        // slot in order — used below to detect and restore derived sub-rows.
+        var audioFormats      = new Dictionary<int, string>();
+        var audioBitrates     = new Dictionary<int, string>();
+        var audioWidths       = new Dictionary<int, string>();
+        var mapSourceIndexes  = new List<int>();   // source index per output slot
 
         for (int i = 0; i < tokens.Length - 1; i++)
         {
+            // -map 0:a:N  — record source index for this output slot
+            if (tokens[i] == "-map" &&
+                tokens[i + 1].StartsWith("0:a:") &&
+                int.TryParse(tokens[i + 1].Substring(4), out var mapIdx))
+            {
+                mapSourceIndexes.Add(mapIdx);
+            }
+
             // -c:a:N <codec>
             if (tokens[i].StartsWith("-c:a:") &&
                 int.TryParse(tokens[i].Substring(5), out var caIdx))
@@ -1321,19 +1331,105 @@ public partial class MainWindow : Window
             }
         }
 
-        for (int i = 0; i < TranscodeAudioTracks.Count; i++)
+        // ── Sub-row restore and track state apply ─────────────────────
+        // Rebuild the same sourceIndexMap CommandBuilder uses so we can
+        // reverse-map a saved source audio index back to its parent track.
+        // e.g. sourceIndexMap[OriginalTrackIndex] = audio-relative index
+        var sourceIndexMap = new Dictionary<int, int>();
+        int audioRelIdx = 0;
+        foreach (var t in TranscodeAudioTracks.Where(t => !t.IsSubRow))
+            sourceIndexMap[t.OriginalTrackIndex] = audioRelIdx++;
+
+        // Invert the map: audio-relative index → parent TranscodeAudioTrack
+        var indexToParent = sourceIndexMap
+            .ToDictionary(kv => kv.Value,
+                          kv => TranscodeAudioTracks.First(
+                              t => !t.IsSubRow && t.OriginalTrackIndex == kv.Key));
+
+        // Track which lossless parents had a sub-row synthesised so we can
+        // deselect them at the end if they never appeared as a copy slot.
+        var parentsWithSubRows  = new HashSet<TranscodeAudioTrack>();
+        var parentsAlsoSelected = new HashSet<TranscodeAudioTrack>();
+
+        // Walk each output slot in the saved command.
+        // The format token (copy vs encode) drives every decision:
+        //
+        //   Non-lossless parent, any format  → apply Format/BitRate/Width directly
+        //   Lossless parent, format = Keep   → parent was selected; set IsSelected,
+        //                                      restore Format explicitly to Keep
+        //   Lossless parent, format = encode → derive a sub-row with that
+        //                                      Format/BitRate/Width; parent selection
+        //                                      determined after the loop
+        for (int outIdx = 0; outIdx < mapSourceIndexes.Count; outIdx++)
         {
-            if (audioFormats.TryGetValue(i, out var fmt))
-                TranscodeAudioTracks[i].Format = fmt;
+            var srcIdx = mapSourceIndexes[outIdx];
 
-            if (audioBitrates.TryGetValue(i, out var br))
-                TranscodeAudioTracks[i].BitRate = br;
+            if (!indexToParent.TryGetValue(srcIdx, out var parent)) continue;
 
-            // Restore Width after Format so AvailableWidths is already
-            // populated with the correct options when Width is set.
-            if (audioWidths.TryGetValue(i, out var w))
-                TranscodeAudioTracks[i].Width = w;
+            var fmt    = audioFormats.TryGetValue(outIdx, out var f) ? f : "Keep";
+            var isKeep = fmt.Equals("Keep", StringComparison.OrdinalIgnoreCase);
+
+            if (!parent.IsLossless)
+            {
+                // Normal (non-lossless) track — apply settings directly.
+                parent.Format = fmt;
+
+                if (audioBitrates.TryGetValue(outIdx, out var br))
+                    parent.BitRate = br;
+
+                // Restore Width after Format so AvailableWidths is already
+                // populated with the correct options when Width is set.
+                if (audioWidths.TryGetValue(outIdx, out var w))
+                    parent.Width = w;
+            }
+            else if (isKeep)
+            {
+                // Lossless parent mapped as copy — it was selected.
+                // Set explicitly rather than relying on the default.
+                parent.IsSelected = true;
+                parent.Format     = "Keep";
+                parentsAlsoSelected.Add(parent);
+            }
+            else
+            {
+                // Lossless parent with an encode format — this is a derived
+                // sub-row. Synthesise it and insert after the parent.
+                var subRow = new TranscodeAudioTrack
+                {
+                    OriginalTrackIndex = parent.OriginalTrackIndex,
+                    IsSubRow           = true,
+                    IsLossless         = false,
+                    ParentTrackIndex   = parent.OriginalTrackIndex,
+                    SourceChannels     = parent.SourceChannels,
+                    SourceBitRateKbps  = 0,   // lossless source — no bitrate ceiling
+                    IsSelected         = true,
+                    TrackInfo          = $"  \u21b3 derived from {parent.TrackInfo}",
+                    Format             = fmt,
+                    Width              = audioWidths.TryGetValue(outIdx, out var w) ? w : "Keep",
+                    BitRate            = audioBitrates.TryGetValue(outIdx, out var br) ? br : AppSettings.Instance.SubRowDefaultBitRate
+                };
+
+                // Insert immediately after the last existing sub-row for this
+                // parent, or directly after the parent if it has none yet.
+                var parentIdx = TranscodeAudioTracks.IndexOf(parent);
+                var insertAt  = parentIdx + 1;
+                while (insertAt < TranscodeAudioTracks.Count &&
+                       TranscodeAudioTracks[insertAt].IsSubRow &&
+                       TranscodeAudioTracks[insertAt].ParentTrackIndex == parent.OriginalTrackIndex)
+                {
+                    insertAt++;
+                }
+
+                TranscodeAudioTracks.Insert(insertAt, subRow);
+                parentsWithSubRows.Add(parent);
+            }
         }
+
+        // Deselect lossless parents whose only appearance in the saved command
+        // was as a sub-row source — i.e. they never had a copy slot.
+        foreach (var parent in parentsWithSubRows)
+            if (!parentsAlsoSelected.Contains(parent))
+                parent.IsSelected = false;
 
         // ── Settings mismatch detection ───────────────────────────────
         // Compare the saved command against current app preferences.
@@ -2444,6 +2540,38 @@ public partial class MainWindow : Window
     }
 
     // ── Menu handlers ────────────────────────────────────────────────
+    // ── History menu ─────────────────────────────────────────────────
+
+    private void ClearInputHistory_Click(object sender, RoutedEventArgs e)
+    {
+        var result = MessageBox.Show(
+            "Clear the input directory history?",
+            "Clear Input History",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+
+        if (result != MessageBoxResult.Yes) return;
+
+        AppSettings.Instance.RecentInputFolders.Clear();
+        AppSettings.Instance.Save();
+        RefreshHistoryDropdowns();
+    }
+
+    private void ClearOutputHistory_Click(object sender, RoutedEventArgs e)
+    {
+        var result = MessageBox.Show(
+            "Clear the output directory history?",
+            "Clear Output History",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+
+        if (result != MessageBoxResult.Yes) return;
+
+        AppSettings.Instance.RecentOutputFolders.Clear();
+        AppSettings.Instance.Save();
+        RefreshHistoryDropdowns();
+    }
+
     private void Exit_Click(object sender, RoutedEventArgs e) => Close();
 
     private void About_Click(object sender, RoutedEventArgs e)
@@ -2511,7 +2639,7 @@ public partial class MainWindow : Window
             TrackInfo          = $"  ↳ derived from {parent.TrackInfo}",
             Format             = "eac3",
             Width              = "Keep",
-            BitRate            = "640"
+            BitRate            = AppSettings.Instance.SubRowDefaultBitRate
         };
 
         // Insert immediately after the last existing sub-row for this parent,

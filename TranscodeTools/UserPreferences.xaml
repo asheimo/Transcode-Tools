@@ -5,8 +5,8 @@
        1. Tool Paths   — external executable paths
        2. Encode       — GPU vendor, presets, quality flags, HEVC default
        3. Remux        — MKVMerge and RoboCopy defaults
-       4. File Names   — title case, resolution append
-       5. Run          — logging, auto-move, folder history
+       4. File Management — title case, resolution append, auto-move
+       5. Logging         — logging settings, folder history
      ============================================================ -->
 <Window x:Class="TranscodeTools.UserPreferences"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -311,6 +311,29 @@
 
                         <Border Height="1" Background="{DynamicResource SeparatorColor}" Margin="0,16,0,16"/>
 
+                        <!-- Sub-row Default Bit Rate — shared by both vendors -->
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                            <TextBlock Text="Sub-row Default Bit Rate:"
+                                       Style="{StaticResource PrefLabel}"
+                                       VerticalAlignment="Center"/>
+                            <ComboBox x:Name="CbxSubRowDefaultBitRate"
+                                      VerticalContentAlignment="Center"
+                                      Width="80" HorizontalAlignment="Left">
+                                <sys:String>1536</sys:String>
+                                <sys:String>1024</sys:String>
+                                <sys:String>640</sys:String>
+                                <sys:String>448</sys:String>
+                                <sys:String>384</sys:String>
+                                <sys:String>320</sys:String>
+                                <sys:String>256</sys:String>
+                                <sys:String>192</sys:String>
+                            </ComboBox>
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="Default bit rate applied to new derived lossy sub-rows only."/>
+
+                        <Border Height="1" Background="{DynamicResource SeparatorColor}" Margin="0,8,0,16"/>
+
                         <!-- Always Convert to HEVC — shared by both vendors -->
                         <CheckBox x:Name="ChkAlwaysConvertToHevc"
                                   Content="Always Convert to HEVC"
@@ -324,10 +347,10 @@
             </TabItem>
 
             <!-- ════════════════════════════════════════════════════
-                 TAB 4 — FILE NAMES
-                 Title case correction and resolution append.
+                 TAB 4 — FILE MANAGEMENT
+                 Title case, resolution append, auto-move.
                  ════════════════════════════════════════════════════ -->
-            <TabItem Header="File Names">
+            <TabItem Header="File Management">
                 <ScrollViewer VerticalScrollBarVisibility="Auto"
                               Padding="20,16,20,16">
                     <StackPanel>
@@ -369,13 +392,25 @@
                                    Margin="44,0,0,0"
                                    Text="Probes all files including those that already have a resolution suffix, to confirm the label is correct."/>
 
+                        <Border Height="1" Background="{DynamicResource SeparatorColor}" Margin="0,0,0,16"/>
+
+                        <!-- Auto-move -->
+                        <CheckBox x:Name="ChkAutoMoveCompleted"
+                                  Content="Disable automatic move of completed folders"
+                                  HorizontalAlignment="Left"
+                                  Margin="0,0,0,4"
+                                  Checked="ChkAutoMoveCompleted_Changed"
+                                  Unchecked="ChkAutoMoveCompleted_Changed"/>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Text="By default, output folders whose files all succeeded are moved to a Completed\ subfolder after each run. Check this to disable that behaviour."/>
+
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
 
             <!-- ════════════════════════════════════════════════════
-                 TAB 5 — RUN
-                 Logging, auto-move, folder history size.
+                 TAB 5 — LOGGING
+                 Logging settings and folder history size.
                  ════════════════════════════════════════════════════ -->
             <TabItem Header="Logging">
                 <ScrollViewer VerticalScrollBarVisibility="Auto"
@@ -419,18 +454,6 @@
                                 <sys:String>debug</sys:String>
                             </ComboBox>
                         </StackPanel>
-
-                        <Border Height="1" Background="{DynamicResource SeparatorColor}" Margin="0,0,0,16"/>
-
-                        <!-- Auto-move -->
-                        <CheckBox x:Name="ChkAutoMoveCompleted"
-                                  Content="Disable automatic move of completed folders"
-                                  HorizontalAlignment="Left"
-                                  Margin="0,0,0,4"
-                                  Checked="ChkAutoMoveCompleted_Changed"
-                                  Unchecked="ChkAutoMoveCompleted_Changed"/>
-                        <TextBlock Style="{StaticResource HintText}"
-                                   Text="By default, output folders whose files all succeeded are moved to a Completed\ subfolder after each run. Check this to disable that behaviour."/>
 
                         <Border Height="1" Background="{DynamicResource SeparatorColor}" Margin="0,0,0,16"/>
 

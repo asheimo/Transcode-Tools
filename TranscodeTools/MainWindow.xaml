@@ -124,8 +124,13 @@
             <MenuItem Header="File">
                 <MenuItem Header="Open Input Directory"  Click="OpenInputDirectory_Click"/>
                 <MenuItem Header="Open Output Directory" Click="OpenOutputDirectory_Click"/>
+                <Separator Style="{StaticResource {x:Static MenuItem.SeparatorStyleKey}}"/>
                 <MenuItem x:Name="RunMenuItem" Header="Run Remux" Click="Run_Click"/>
                 <Separator Style="{StaticResource {x:Static MenuItem.SeparatorStyleKey}}"/>
+                <MenuItem Header="History">
+                    <MenuItem Header="Clear Input History"  Click="ClearInputHistory_Click"/>
+                    <MenuItem Header="Clear Output History" Click="ClearOutputHistory_Click"/>
+                </MenuItem>
                 <MenuItem Header="Preferences"           Click="Preferences_Click"/>
                 <Separator Style="{StaticResource {x:Static MenuItem.SeparatorStyleKey}}"/>
                 <MenuItem Header="Exit"                  Click="Exit_Click"/>
