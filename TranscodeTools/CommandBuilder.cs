@@ -166,9 +166,9 @@ public static class CommandBuilder
     //   -c:v <codec>_cuvid                           hardware decode
     //   -map 0:v:0 -c:v hevc_nvenc / h264_nvenc     hardware encode
     //   -preset p1–p7                                quality/speed
-    //   -highbitdepth true                           only: hevc, 8-bit source
-    //   -filter:v scale_cuda=format=p010le           only: hevc, 8-bit source
-    //   -filter:v yadif_cuda=mode=1                  only: interlaced source
+    //   -profile main10                              always: hevc output (faster than -highbitdepth)
+    //   -filter:v scale_cuda=format=yuv420p          always: NVENC (overlay_cuda requires yuv420p)
+    //   -filter:v yadif_cuda=mode=1                  only: interlaced source (before scale_cuda)
     //
     // Intel QSV pipeline:
     //   -hwaccel qsv -hwaccel_output_format qsv      keep pipeline on QSV surfaces
@@ -181,7 +181,8 @@ public static class CommandBuilder
     // Shared (both vendors):
     //   -map 0:a:N -c:a copy / eac3 / ac3           per audio track
     //   -b:a:N <bitrate>k                            when encoding audio
-    //   -map 0:s:N -c:s copy                         per subtitle track
+    //   -map 0:s:N -c:s copy                         per subtitle track (non-burned)
+    //   -filter_complex + scale_npp/scale2ref_npp     subtitle burn (NVENC + NPP only)
     //   HDR10 color metadata flags                   bt2020 sources only
     //   DoVi copy path                               bypasses all hwaccel
     //
@@ -330,6 +331,18 @@ public static class CommandBuilder
         var sourceIs10bit = sourcePixFmt.Contains("10");
         var needs10bit    = useHevc && !sourceIs10bit;
 
+        // ── Detect subtitle burn ──────────────────────────────────────
+        // Only one track can be burned at a time (enforced by the UI).
+        // Burn is NVENC-only — QSV does not support this path.
+        // burnTrackIndex is the 0-based subtitle-relative index of the burned
+        // track (its position in subtitleTracks), or -1 if no burn is active.
+        var burnTrack = !useIntel
+            ? subtitleTracks.Select((t, i) => (track: t, idx: i))
+                            .FirstOrDefault(x => x.track.Burn)
+            : default;
+        var burnTrackIndex = burnTrack.track != null ? burnTrack.idx : -1;
+        var hasBurn = burnTrackIndex >= 0;
+
         // ── Assemble command ──────────────────────────────────────────
         sb.Append($"\"{ffmpegPath}\"");
 
@@ -361,9 +374,118 @@ public static class CommandBuilder
 
         sb.Append($" -i \"{inputFile}\"");
 
+        // ── Video filter chain ────────────────────────────────────────
+        // Must come before -map and encoder flags so ffmpeg can resolve
+        // the [vout] label reference in -map [vout] on the burn path.
+        //
+        // NVENC filters:
+        //   yadif_cuda=mode=1           — GPU deinterlace (interlaced sources only)
+        //   scale_cuda=format=p010le    — 8-bit→10-bit on GPU (non-burn path)
+        //   scale_cuda=format=yuv420p   — overlay_cuda requires yuv420p (burn path)
+        //   -profile main10             — encoder handles 10-bit output
+        //
+        // QSV filters:
+        //   vpp_qsv                     — oneVPL Video Processing Pipeline
+        //   This single filter handles both deinterlace and format conversion
+        //   with proper range control via out_range=tv. scale_qsv is NOT used
+        //   as it has no range parameter and expands limited-range input to
+        //   full-range during pixel format conversion.
+        //
+        //   format=p010le               — 8-bit→10-bit promotion (needs10bit only)
+        //   out_range=tv                — preserve limited range (16-235/64-940)
+        //                                 through the format conversion
+        //   deinterlace=2               — advanced deinterlace (isInterlaced only)
+        //
+        // Order matters for NVENC: deinterlace must come before format conversion.
+        // vpp_qsv handles both in a single filter pass so ordering is not an issue.
+        var isInterlaced = video?.IsInterlaced ?? false;
+
+        if (useIntel && (isInterlaced || needs10bit))
+        {
+            // Build vpp_qsv filter — combine deinterlace and/or format conversion
+            // into a single filter pass with explicit limited-range output.
+            var vppParts = new List<string>();
+
+            if (needs10bit)
+                vppParts.Add("format=p010le");
+
+            // out_range=tv ensures limited-range pixel values are preserved
+            // through the VPP conversion. Always emit for QSV to be safe.
+            vppParts.Add("out_range=tv");
+
+            // scale_mode=hq: use the high quality VPP processing path.
+            // Default is auto which resolves to low_power, producing visibly
+            // softer output during format conversion.
+            vppParts.Add("scale_mode=hq");
+
+            if (isInterlaced)
+                vppParts.Add("deinterlace=2");
+
+            sb.Append($" -filter:v vpp_qsv={string.Join(":", vppParts)}");
+        }
+        else if (!useIntel && hasBurn)
+        {
+            // ── NVENC burn path — scale_cuda + overlay_cuda ───────────
+            // Confirmed working pipeline from testing:
+            //   scale_cuda=format=yuv420p  overlay_cuda accepts yuv420p on
+            //                              the base layer (not nv12, not p010le)
+            //   fps=24000/1001             matches source frame rate for PGS sync
+            //   format=yuva420p            CPU converts PGS bgra → yuva420p
+            //   hwupload_cuda              uploads subtitle frames to GPU
+            //   overlay_cuda               composites on GPU
+            //
+            // 10-bit output is handled by -profile main10 on the encoder —
+            // no filter-side pixel format conversion needed. overlay_cuda
+            // does not support p010le input so the encoder handles promotion.
+            //
+            // Filter chain stages:
+            //   1. [0:v] → scale_cuda=format=yuv420p → [main]
+            //   2. [0:s:N] → fps,format=yuva420p,hwupload_cuda → [sub]
+            //   3. [main][sub] → overlay_cuda → [vout]
+            var filterParts = new List<string>();
+
+            // Stage 1: scale_cuda — convert to yuv420p for overlay_cuda compatibility
+            filterParts.Add("[0:v]scale_cuda=format=yuv420p[main]");
+
+            // Stage 2: PGS subtitle — CPU decode, format convert, upload to GPU
+            var fps = video?.FrameRate ?? "24000/1001";
+            filterParts.Add($"[0:s:{burnTrackIndex}]fps={fps},format=yuva420p,hwupload_cuda[sub]");
+
+            // Stage 3: composite on GPU
+            filterParts.Add("[main][sub]overlay_cuda=ts_sync_mode=nearest:repeatlast=1[vout]");
+
+            sb.Append($" -filter_complex \"{string.Join(";", filterParts)}\"");
+        }
+        else if (!useIntel && (isInterlaced || needs10bit))
+        {
+            // NVENC path without burn: deinterlace and/or 8-bit→10-bit conversion.
+            // -profile main10 on the encoder handles 10-bit output.
+            // scale_cuda=format=p010le promotes the pixel format in the filter
+            // graph before the encoder receives it.
+            var filterParts = new List<string>();
+
+            if (isInterlaced)
+                filterParts.Add("yadif_cuda=mode=1");
+
+            if (needs10bit)
+                filterParts.Add("scale_cuda=format=p010le");
+
+            sb.Append($" -filter:v {string.Join(",", filterParts)}");
+        }
+
         // ── Video encode ──────────────────────────────────────────────
-        sb.Append(" -map 0:v:0");
+        // Burn path: -map [vout] references the filter_complex output label
+        // defined above. Normal path: -map 0:v:0 maps the first video stream.
+        sb.Append(hasBurn ? " -map [vout]" : " -map 0:v:0");
         sb.Append($" -c:v {encodeCodec}");
+
+        // NVENC HEVC: always use -profile main10.
+        // Testing confirmed -profile main10 is faster than -highbitdepth +
+        // scale_cuda=format=p010le (286 fps vs 278 fps on h264 1080p source),
+        // produces correct Main 10 output, and works with both the burn and
+        // non-burn filter paths.
+        if (!useIntel && useHevc)
+            sb.Append(" -profile main10");
 
         // Preset: "None" omits the flag (NVENC auto-selects; QSV defaults to
         // "medium"). For QSV, omitting -preset disables -global_quality ICQ
@@ -414,80 +536,24 @@ public static class CommandBuilder
                 sb.Append($" -max_cll \"{video.MaxCll}\"");
         }
 
-        // ── Video filter chain ────────────────────────────────────────
-        // Filters are vendor-specific.
-        //
-        // NVENC filters:
-        //   yadif_cuda=mode=1           — GPU deinterlace
-        //   scale_cuda=format=p010le    — 8-bit→10-bit on GPU
-        //   -highbitdepth true          — encoder flag paired with scale_cuda
-        //
-        // QSV filters:
-        //   vpp_qsv                     — oneVPL Video Processing Pipeline
-        //   This single filter handles both deinterlace and format conversion
-        //   with proper range control via out_range=tv. scale_qsv is NOT used
-        //   as it has no range parameter and expands limited-range input to
-        //   full-range during pixel format conversion.
-        //
-        //   format=p010le               — 8-bit→10-bit promotion (needs10bit only)
-        //   out_range=tv                — preserve limited range (16-235/64-940)
-        //                                 through the format conversion
-        //   deinterlace=2               — advanced deinterlace (isInterlaced only)
-        //
-        // Order matters for NVENC: deinterlace must come before format conversion.
-        // vpp_qsv handles both in a single filter pass so ordering is not an issue.
-        var isInterlaced = video?.IsInterlaced ?? false;
-
-        if (useIntel && (isInterlaced || needs10bit))
-        {
-            // Build vpp_qsv filter — combine deinterlace and/or format conversion
-            // into a single filter pass with explicit limited-range output.
-            var vppParts = new List<string>();
-
-            if (needs10bit)
-                vppParts.Add("format=p010le");
-
-            // out_range=tv ensures limited-range pixel values are preserved
-            // through the VPP conversion. Always emit for QSV to be safe.
-            vppParts.Add("out_range=tv");
-
-            // scale_mode=hq: use the high quality VPP processing path.
-            // Default is auto which resolves to low_power, producing visibly
-            // softer output during format conversion.
-            vppParts.Add("scale_mode=hq");
-
-            if (isInterlaced)
-                vppParts.Add("deinterlace=2");
-
-            sb.Append($" -filter:v vpp_qsv={string.Join(":", vppParts)}");
-        }
-        else if (!useIntel && (isInterlaced || needs10bit))
-        {
-            // NVENC path: deinterlace and/or 8-bit→10-bit conversion via filters.
-            // -highbitdepth is NVENC-only — not applicable for QSV.
-            if (needs10bit)
-                sb.Append(" -highbitdepth true");
-
-            var filterParts = new List<string>();
-
-            if (isInterlaced)
-                filterParts.Add("yadif_cuda=mode=1");
-
-            if (needs10bit)
-                filterParts.Add("scale_cuda=format=p010le");
-
-            sb.Append($" -filter:v {string.Join(",", filterParts)}");
-        }
-
         // ── Audio — per track ─────────────────────────────────────────
         // Selection-aware and sub-row-aware. See AppendAudioArgs below.
         AppendAudioArgs(sb, audioTracks);
 
         // ── Subtitles — per track ─────────────────────────────────────
-        // All subtitle tracks are copied. Burn via overlay_cuda is backlog.
+        // Burned track is baked into the video stream — exclude it from
+        // the output subtitle streams. All other tracks are copied.
+        //
+        // -map 0:s:i uses the SOURCE index (position in the input file).
+        // -c:s:N uses the OUTPUT index (0-based position in the output).
+        // These diverge when the burned track is skipped — e.g. if track 0
+        // is burned and track 1 is copied, the output index is 0 not 1.
+        int subOutIdx = 0;
         for (int i = 0; i < subtitleTracks.Count; i++)
         {
-            sb.Append($" -map 0:s:{i} -c:s:{i} copy");
+            if (i == burnTrackIndex) continue;
+            sb.Append($" -map 0:s:{i} -c:s:{subOutIdx} copy");
+            subOutIdx++;
         }
 
         sb.Append($" \"{outputFile}\"");

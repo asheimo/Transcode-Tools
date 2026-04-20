@@ -505,4 +505,14 @@ public class TranscodeSubtitleTrack : ObservableBase
         get => _burn;
         set { _burn = value; OnPropertyChanged(); }
     }
+
+    // BurnEnabled — false when burn is not applicable for this file
+    // (DoVi stream-copy path, or Intel QSV vendor selected).
+    // Drives the IsEnabled state of the Burn checkbox in the UI.
+    private bool _burnEnabled = true;
+    public bool BurnEnabled
+    {
+        get => _burnEnabled;
+        set { _burnEnabled = value; OnPropertyChanged(); }
+    }
 }

@@ -86,6 +86,25 @@ public class FileLeafNode : FileTreeNode
         get => _hasYearWarning;
         set { _hasYearWarning = value; OnPropertyChanged(); }
     }
+
+    // Set to true when ResolutionVerifyAlways is on and the resolution label
+    // in the filename does not match what ffprobe reports.
+    // Drives the orange warning indicator in the FileLeafNode DataTemplate.
+    private bool _hasResolutionMismatch;
+    public bool HasResolutionMismatch
+    {
+        get => _hasResolutionMismatch;
+        set { _hasResolutionMismatch = value; OnPropertyChanged(); }
+    }
+
+    // Tooltip text for the resolution mismatch warning.
+    // e.g. "Resolution mismatch: filename says 1080p, ffprobe reports 2160p"
+    private string _resolutionMismatchTooltip = "";
+    public string ResolutionMismatchTooltip
+    {
+        get => _resolutionMismatchTooltip;
+        set { _resolutionMismatchTooltip = value; OnPropertyChanged(); }
+    }
 }
 
 // ── FOLDER LIST NODES (left panel) ───────────────────────────────────

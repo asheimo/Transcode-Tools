@@ -372,6 +372,13 @@
                                                ToolTip="Missing Year Label"
                                                Visibility="{Binding HasYearWarning,
                                                    Converter={StaticResource BoolToVisibility}}"/>
+                                    <TextBlock Text="⚠ "
+                                               Foreground="#FF8C00"
+                                               FontSize="11"
+                                               VerticalAlignment="Center"
+                                               ToolTip="{Binding ResolutionMismatchTooltip}"
+                                               Visibility="{Binding HasResolutionMismatch,
+                                                   Converter={StaticResource BoolToVisibility}}"/>
                                     <TextBlock Text="{Binding DisplayName}"
                                                Background="{Binding Background}"
                                                Padding="2,1">
@@ -379,6 +386,10 @@
                                             <ContextMenu>
                                                 <MenuItem Header="Rename"
                                                           Click="RenameLeaf_Click"/>
+                                                <MenuItem Header="Fix Resolution Label"
+                                                          Click="FixResolutionLabel_Click"
+                                                          Visibility="{Binding HasResolutionMismatch,
+                                                              Converter={StaticResource BoolToVisibility}}"/>
                                                 <MenuItem Header="Delete Settings File"
                                                           Click="DeleteSettingsFile_Click"/>
                                                 <MenuItem Header="Open Settings Folder"
@@ -787,7 +798,9 @@
                                 <GridViewColumn Header="Burn" Width="60">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
-                                            <CheckBox IsChecked="{Binding Burn}"/>
+                                            <CheckBox IsChecked="{Binding Burn}"
+                                                      IsEnabled="{Binding BurnEnabled}"
+                                                      Click="BurnSubtitle_Click"/>
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>

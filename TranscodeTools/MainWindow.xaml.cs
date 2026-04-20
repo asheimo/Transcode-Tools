@@ -324,9 +324,6 @@ public partial class MainWindow : Window
             // any folder that has subfolders. No dialog — applied automatically.
             ApplySubfolderTitleCase(rootPath);
         }
-
-        if (!_isTranscodeMode && AppSettings.Instance.ResolutionAppendEnabled && movieNodes.Count > 0)
-            ApplyResolutionAppendAsync(rootPath, movieNodes);
     }
 
     // ── Title Case Correction ─────────────────────────────────────────
@@ -747,8 +744,13 @@ public partial class MainWindow : Window
                     stripped = Regex.Replace(stripped, @"\s*\{edition-[^}]+\}", "",
                         RegexOptions.IgnoreCase).Trim();
 
-                    // Only process files whose bare title matches the folder name
-                    if (!stripped.Equals(folderName.Trim(),
+                    // Only process files whose bare title matches the folder name.
+                    // Strip the year from both sides before comparing so that a
+                    // deliberate year mismatch (e.g. during testing) does not
+                    // prevent the resolution check from running.
+                    var strippedTitle      = YearPattern.Replace(stripped,      "").Trim();
+                    var folderNameNoYear   = YearPattern.Replace(folderName.Trim(), "").Trim();
+                    if (!strippedTitle.Equals(folderNameNoYear,
                         StringComparison.OrdinalIgnoreCase)) continue;
 
                     // Skip if resolution already present and verify-always is off
@@ -776,6 +778,25 @@ public partial class MainWindow : Window
                             existingMatch.Value.TrimStart('-')
                                 .Equals(label, StringComparison.OrdinalIgnoreCase))
                             continue;
+
+                        // Mismatch — existing label differs from what ffprobe reports.
+                        var existingLabel = existingMatch.Success
+                            ? existingMatch.Value.TrimStart('-')
+                            : "unknown";
+
+                        if (!AppSettings.Instance.AutoCorrectResolutionMismatch)
+                        {
+                            // Flag the leaf with an orange warning — user fixes manually.
+                            var leaf = FindLeafByFileName(fileName);
+                            if (leaf != null)
+                            {
+                                leaf.HasResolutionMismatch     = true;
+                                leaf.ResolutionMismatchTooltip =
+                                    $"Resolution mismatch: filename says {existingLabel}, ffprobe reports {label}";
+                            }
+                            continue;
+                        }
+                        // Auto-correct — fall through to rename below.
                     }
 
                     // Build new filename: insert resolution before edition tag if present
@@ -808,6 +829,15 @@ public partial class MainWindow : Window
                     {
                         File.Move(filePath, newFilePath);
                         RenameSettingsFiles(rootPath, folderName, fileName, newFileName);
+
+                        // Update the leaf to reflect the corrected filename in the UI.
+                        var renamedLeaf = FindLeafByFileName(fileName);
+                        if (renamedLeaf != null)
+                        {
+                            renamedLeaf.FileName              = newFileName;
+                            renamedLeaf.DisplayName           = newNameNoExt;
+                            renamedLeaf.HasResolutionMismatch = false;
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -832,6 +862,24 @@ public partial class MainWindow : Window
         >= 480  => "480p",
         _       => ""
     };
+
+    // Searches FileTree.Items for a FileLeafNode matching the given filename.
+    // Checks root-level leaves first, then children of FileGroupNodes.
+    private FileLeafNode? FindLeafByFileName(string fileName)
+    {
+        foreach (var item in FileTree.Items)
+        {
+            if (item is FileLeafNode leaf && leaf.FileName == fileName)
+                return leaf;
+
+            if (item is FileGroupNode group)
+            {
+                var child = group.Children.FirstOrDefault(c => c.FileName == fileName);
+                if (child != null) return child;
+            }
+        }
+        return null;
+    }
 
     // Renames matching .txt settings files in both Remux and Transcode
     // folders when a .mkv file is renamed. Shared by title case and
@@ -900,6 +948,15 @@ public partial class MainWindow : Window
         // before building the tree so the corrected names are displayed.
         if (!_isTranscodeMode && AppSettings.Instance.TitleCaseEnabled)
             ApplyFileTitleCase(fullFolderPath, folderPath, isTvSeason);
+
+        // Run resolution check on the selected movie folder.
+        // TV seasons are excluded — resolution append is movies only.
+        if (!_isTranscodeMode &&
+            AppSettings.Instance.ResolutionAppendEnabled &&
+            e.NewValue is FolderNode selectedMovieNode)
+        {
+            ApplyResolutionAppendAsync(_inputDirectory, new List<FolderNode> { selectedMovieNode });
+        }
 
         try
         {
@@ -1111,6 +1168,17 @@ public partial class MainWindow : Window
             foreach (var t in result.TranscodeVideo)    TranscodeVideoTracks.Add(t);
             foreach (var t in result.TranscodeAudio)    TranscodeAudioTracks.Add(t);
             foreach (var t in result.TranscodeSubtitle) TranscodeSubtitleTracks.Add(t);
+
+            // Disable Burn checkboxes when burn cannot be applied —
+            // DoVi (stream-copy path) or Intel QSV (NPP not supported).
+            var burnEnabled = !(TranscodeVideoTracks.FirstOrDefault()?.HasDoVi == true) &&
+                              !AppSettings.Instance.GpuVendor.Equals(
+                                  "Intel", StringComparison.OrdinalIgnoreCase);
+            foreach (var t in TranscodeSubtitleTracks)
+            {
+                t.BurnEnabled = burnEnabled;
+                if (!burnEnabled) t.Burn = false;
+            }
 
             RefreshVideoWarningColumn();
             RefreshInterlacedColumn();
@@ -1430,6 +1498,31 @@ public partial class MainWindow : Window
         foreach (var parent in parentsWithSubRows)
             if (!parentsAlsoSelected.Contains(parent))
                 parent.IsSelected = false;
+
+        // ── Subtitle: Burn restore ────────────────────────────────────
+        // TranscodeSubtitleTrack has no IsSelected — subtitle inclusion is
+        // determined by the command (burned or mapped). We only need to
+        // restore the Burn checkbox state here.
+        //
+        // Burn detection: the burned track appears as [0:s:N] inside
+        // filter_complex — it is NOT mapped via -map 0:s:N in the output.
+        int savedBurnIndex = -1;
+        var fcToken = tokens.FirstOrDefault(t =>
+            t.StartsWith("[0:s:", StringComparison.OrdinalIgnoreCase));
+        if (fcToken != null)
+        {
+            // fcToken looks like "[0:s:0]fps=..." — extract the N
+            var start = "[0:s:".Length;
+            var end   = fcToken.IndexOf(']');
+            if (end > start &&
+                int.TryParse(fcToken.Substring(start, end - start), out var bi))
+            {
+                savedBurnIndex = bi;
+            }
+        }
+
+        for (int i = 0; i < TranscodeSubtitleTracks.Count; i++)
+            TranscodeSubtitleTracks[i].Burn = (i == savedBurnIndex);
 
         // ── Settings mismatch detection ───────────────────────────────
         // Compare the saved command against current app preferences.
@@ -1831,6 +1924,55 @@ public partial class MainWindow : Window
         TryLaunch(AppSettings.Instance.SubtitleEdit_Path, path);
     }
 
+    // ── Subtitle Burn checkbox ────────────────────────────────────────
+    // Enforces single-track burn, blocks QSV, and validates NPP support
+    // in the configured ffmpeg build before allowing the box to be checked.
+    private void BurnSubtitle_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not CheckBox chk) return;
+        if (chk.DataContext is not TranscodeSubtitleTrack clicked) return;
+
+        // Only relevant when the user is checking (not unchecking).
+        if (chk.IsChecked != true) return;
+
+        // ── Block DoVi ───────────────────────────────────────────────
+        // DoVi files use the stream-copy path — no encode, no filter chain.
+        // Burn is meaningless and cannot be applied.
+        if (TranscodeVideoTracks.FirstOrDefault()?.HasDoVi == true)
+        {
+            MessageBox.Show(
+                "Subtitle burn cannot be applied to Dolby Vision files.\n" +
+                "DoVi content is stream-copied and cannot pass through the encode pipeline.",
+                "Burn Not Supported",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            chk.IsChecked = false;
+            clicked.Burn  = false;
+            return;
+        }
+
+        // ── Block QSV ────────────────────────────────────────────────
+        if (AppSettings.Instance.GpuVendor.Equals(
+                "Intel", StringComparison.OrdinalIgnoreCase))
+        {
+            MessageBox.Show(
+                "Subtitle burn is not supported with Intel QSV.\n" +
+                "Switch to NVIDIA in Preferences to use this feature.",
+                "Burn Not Supported",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            chk.IsChecked = false;
+            clicked.Burn  = false;
+            return;
+        }
+
+        // ── Enforce single burn track ─────────────────────────────────
+        // Uncheck and disable all other subtitle tracks' Burn property.
+        foreach (var track in TranscodeSubtitleTracks)
+        {
+            if (track != clicked)
+                track.Burn = false;
+        }
+    }
+
     private void OpenFolderInExplorer_Click(object sender, RoutedEventArgs e)
     {
         if (string.IsNullOrWhiteSpace(_selectedMovieFolder)) return;
@@ -2081,9 +2223,82 @@ public partial class MainWindow : Window
             _selectedMovieFolder = newName;
     }
 
+    // ── Right-click Fix Resolution Label (file leaf context menu) ────
+    // Only visible when HasResolutionMismatch is true. Re-probes the file
+    // with ffprobe, renames it with the correct resolution label, and
+    // clears the orange warning flag.
+    private async void FixResolutionLabel_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem menuItem) return;
+
+        FileLeafNode? leaf = null;
+        if (menuItem.DataContext is FileLeafNode fn)
+            leaf = fn;
+        else if (menuItem.Parent is ContextMenu cm &&
+                 cm.PlacementTarget is FrameworkElement fe &&
+                 fe.DataContext is FileLeafNode placementFn)
+            leaf = placementFn;
+
+        if (leaf == null) return;
+        if (string.IsNullOrWhiteSpace(_inputDirectory) ||
+            string.IsNullOrWhiteSpace(_selectedMovieFolder)) return;
+
+        var folderPath = Path.Combine(_inputDirectory, _selectedMovieFolder);
+        var filePath   = Path.Combine(folderPath, leaf.FileName);
+
+        if (!File.Exists(filePath))
+        {
+            MessageBox.Show("File not found.", "Fix Resolution",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        try
+        {
+            var probe = await FfprobeService.ProbeFileAsync(filePath);
+            var video = probe.RemuxVideo.FirstOrDefault();
+            if (video == null) return;
+
+            var resParts = video.Resolution.Split('x');
+            if (resParts.Length < 2 || !int.TryParse(resParts[1], out var height)) return;
+
+            var label = DeriveResolutionLabel(height);
+            if (string.IsNullOrEmpty(label)) return;
+
+            var nameNoExt    = Path.GetFileNameWithoutExtension(leaf.FileName);
+            var bare         = ResolutionSuffix.Replace(nameNoExt, "");
+            var newNameNoExt = bare + "-" + label;
+            var newFileName  = newNameNoExt + ".mkv";
+            var newFilePath  = Path.Combine(folderPath, newFileName);
+
+            if (File.Exists(newFilePath) && !newFilePath.Equals(filePath,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                MessageBox.Show($"A file named {newFileName} already exists.",
+                    "Fix Resolution", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            File.Move(filePath, newFilePath);
+            RenameSettingsFiles(_inputDirectory, _selectedMovieFolder,
+                leaf.FileName, newFileName);
+
+            // Update the leaf to reflect the new filename and clear the flag.
+            leaf.FileName             = newFileName;
+            leaf.DisplayName          = newNameNoExt;
+            leaf.HasResolutionMismatch = false;
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Could not fix resolution label:\n{ex.Message}",
+                "Fix Resolution Failed", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     // ── Right-click Delete Settings File (file leaf context menu) ────
     // Deletes the .txt settings file for the current mode (Remux or Transcode).
-    // Prompts for confirmation first. Updates the leaf background after delete.
+    // Prompts for confirmation first. Clears the green leaf background and
+    // disables View Command after a successful delete.
     private void DeleteSettingsFile_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not MenuItem menuItem) return;
@@ -2123,6 +2338,9 @@ public partial class MainWindow : Window
             File.Delete(settingsPath);
             // Clear the green highlight — no settings file any more.
             leaf.Background = System.Windows.Media.Brushes.Transparent;
+            // Disable View Command — no settings file to view.
+            if (!_isTranscodeMode)
+                ViewRemuxCommandBtn.IsEnabled = false;
         }
         catch (Exception ex)
         {

@@ -387,10 +387,21 @@
                         <CheckBox x:Name="ChkResolutionVerifyAlways"
                                   Content="Always verify resolution via ffprobe (slower)"
                                   HorizontalAlignment="Left"
-                                  Margin="22,0,0,4"/>
+                                  Margin="22,0,0,4"
+                                  Checked="ChkResolutionVerifyAlways_Changed"
+                                  Unchecked="ChkResolutionVerifyAlways_Changed"/>
                         <TextBlock Style="{StaticResource HintText}"
                                    Margin="44,0,0,0"
                                    Text="Probes all files including those that already have a resolution suffix, to confirm the label is correct."/>
+
+                        <CheckBox x:Name="ChkAutoCorrectResolutionMismatch"
+                                  Content="Auto-correct resolution label on mismatch"
+                                  HorizontalAlignment="Left"
+                                  IsEnabled="False"
+                                  Margin="44,4,0,4"/>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Margin="66,0,0,0"
+                                   Text="When a mismatch is found, silently renames the file instead of flagging it with a warning. Only active when Always verify is on."/>
 
                         <Border Height="1" Background="{DynamicResource SeparatorColor}" Margin="0,0,0,16"/>
 

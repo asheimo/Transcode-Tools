@@ -137,6 +137,12 @@ public sealed class AppSettings
     public bool ResolutionAppendEnabled  { get; set; } = true;
     public bool ResolutionVerifyAlways   { get; set; } = false;
 
+    // AutoCorrectResolutionMismatch: when true and ResolutionVerifyAlways is on,
+    // silently renames files whose resolution label doesn't match ffprobe instead
+    // of flagging them with a warning. Only meaningful when ResolutionVerifyAlways
+    // is also true.
+    public bool AutoCorrectResolutionMismatch { get; set; } = false;
+
     // ── Run / Log settings ───────────────────────────────────────────
     // WriteLogFiles: when true, a log file is written per processed file
     // to <OutputDirectory>\Logs\<timestamp>\<FolderPath>\<Name>.log.

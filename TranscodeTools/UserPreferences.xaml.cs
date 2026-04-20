@@ -51,6 +51,7 @@ public partial class UserPreferences : Window
         bool   TitleCaseEnabled,
         bool   ResolutionAppendEnabled,
         bool   ResolutionVerifyAlways,
+        bool   AutoCorrectResolutionMismatch,
         bool   WriteLogFiles,
         bool   VerboseLogging,
         string FfmpegLogLevel,
@@ -88,6 +89,7 @@ public partial class UserPreferences : Window
             s.TitleCaseEnabled,
             s.ResolutionAppendEnabled,
             s.ResolutionVerifyAlways,
+            s.AutoCorrectResolutionMismatch,
             s.WriteLogFiles,
             s.VerboseLogging,
             s.FfmpegLogLevel,
@@ -154,8 +156,10 @@ public partial class UserPreferences : Window
         // File Names tab
         ChkTitleCase.IsChecked              = s.TitleCaseEnabled;
         TbxAcronyms.Text                    = string.Join(", ", s.TitleCaseAcronyms);
-        ChkResolutionAppend.IsChecked       = s.ResolutionAppendEnabled;
-        ChkResolutionVerifyAlways.IsChecked = s.ResolutionVerifyAlways;
+        ChkResolutionAppend.IsChecked              = s.ResolutionAppendEnabled;
+        ChkResolutionVerifyAlways.IsChecked        = s.ResolutionVerifyAlways;
+        ChkAutoCorrectResolutionMismatch.IsChecked = s.AutoCorrectResolutionMismatch;
+        ChkAutoCorrectResolutionMismatch.IsEnabled = s.ResolutionVerifyAlways;
 
         // Run tab
         ChkWriteLogFiles.IsChecked   = s.WriteLogFiles;
@@ -205,8 +209,9 @@ public partial class UserPreferences : Window
 
         // File Names
         s.TitleCaseEnabled        = ChkTitleCase.IsChecked == true;
-        s.ResolutionAppendEnabled = ChkResolutionAppend.IsChecked == true;
-        s.ResolutionVerifyAlways  = ChkResolutionVerifyAlways.IsChecked == true;
+        s.ResolutionAppendEnabled         = ChkResolutionAppend.IsChecked == true;
+        s.ResolutionVerifyAlways          = ChkResolutionVerifyAlways.IsChecked == true;
+        s.AutoCorrectResolutionMismatch   = ChkAutoCorrectResolutionMismatch.IsChecked == true;
         s.TitleCaseAcronyms       = TbxAcronyms.Text
             .Split(',')
             .Select(a => a.Trim())
@@ -268,8 +273,9 @@ public partial class UserPreferences : Window
         s.TitleCaseEnabled        = _snapshot.TitleCaseEnabled;
         s.TitleCaseAcronyms       = _snapshot.TitleCaseAcronyms
             .Split(',').Select(a => a.Trim()).Where(a => !string.IsNullOrEmpty(a)).ToList();
-        s.ResolutionAppendEnabled = _snapshot.ResolutionAppendEnabled;
-        s.ResolutionVerifyAlways  = _snapshot.ResolutionVerifyAlways;
+        s.ResolutionAppendEnabled         = _snapshot.ResolutionAppendEnabled;
+        s.ResolutionVerifyAlways          = _snapshot.ResolutionVerifyAlways;
+        s.AutoCorrectResolutionMismatch   = _snapshot.AutoCorrectResolutionMismatch;
         s.WriteLogFiles           = _snapshot.WriteLogFiles;
         s.VerboseLogging          = _snapshot.VerboseLogging;
         s.FfmpegLogLevel          = _snapshot.FfmpegLogLevel;
@@ -297,6 +303,14 @@ public partial class UserPreferences : Window
     // ── Run tab — logging enable/disable chain ───────────────────────
     // Write Log Files controls whether Verbose Logging is enabled.
     // Verbose Logging controls whether the log level dropdown is enabled.
+
+    private void ChkResolutionVerifyAlways_Changed(object sender, RoutedEventArgs e)
+    {
+        var verifyOn = ChkResolutionVerifyAlways.IsChecked == true;
+        ChkAutoCorrectResolutionMismatch.IsEnabled = verifyOn;
+        if (!verifyOn)
+            ChkAutoCorrectResolutionMismatch.IsChecked = false;
+    }
 
     private void ChkWriteLogFiles_Changed(object sender, RoutedEventArgs e)
     {
