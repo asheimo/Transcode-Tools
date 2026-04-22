@@ -487,6 +487,45 @@ public static class CommandBuilder
         if (!useIntel && useHevc)
             sb.Append(" -profile main10");
 
+        // ── Subtitle-burn SPS crop fix ────────────────────────────────
+        // overlay_cuda does not propagate the main input's display crop
+        // to its output. When the source height is not 16-aligned (e.g.
+        // 1080), NVDEC decodes into a 16-aligned CUDA surface (1088) and
+        // the overlay pass produces a 1088-tall frame with uninitialized
+        // memory in the bottom N rows — which renders green in YUV.
+        // hevc_nvenc then writes coded_height=1088 with crop_bottom=0 in
+        // the SPS, leaving the green padding visible in the output.
+        //
+        // The non-burn path does not hit this because scale_cuda alone
+        // preserves the 1080 display geometry end-to-end; overlay_cuda is
+        // where the crop information is lost.
+        //
+        // Fix: patch the SPS conformance crop window after encode via
+        // hevc_metadata bitstream filter. This is metadata-only — no
+        // re-encode, no performance impact. Produces a file with
+        // display_height=1080, coded_height=1088, matching how the
+        // non-burn path reports dimensions and how every legitimate
+        // 1080p HEVC file is structured.
+        //
+        // Only needed on the NVENC HEVC burn path for sources whose
+        // height is not already 16-aligned. QSV handles crop correctly
+        // via its own encoder and does not hit this bug.
+        if (!useIntel && useHevc && hasBurn)
+        {
+            var srcHeight = 0;
+            var res = video?.Resolution ?? "";
+            var xIdx = res.IndexOf('x');
+            if (xIdx > 0)
+                int.TryParse(res.Substring(xIdx + 1), out srcHeight);
+
+            if (srcHeight > 0)
+            {
+                var vPad = (16 - srcHeight % 16) % 16;
+                if (vPad > 0)
+                    sb.Append($" -bsf:v hevc_metadata=crop_bottom={vPad}");
+            }
+        }
+
         // Preset: "None" omits the flag (NVENC auto-selects; QSV defaults to
         // "medium"). For QSV, omitting -preset disables -global_quality ICQ
         // mode, so "None" effectively falls back to QSV CBR — only do this
