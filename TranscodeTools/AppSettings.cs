@@ -145,16 +145,27 @@ public sealed class AppSettings
 
     // ── Run / Log settings ───────────────────────────────────────────
     // WriteLogFiles: when true, a log file is written per processed file
-    // to <OutputDirectory>\Logs\<timestamp>\<FolderPath>\<Name>.log.
-    // VerboseLogging: only active when WriteLogFiles is on. When true,
-    // ffmpeg runs at FfmpegLogLevel (without -stats) and all output goes
-    // to the log file; the Run window shows an indeterminate progress bar.
-    // When false, ffmpeg runs with -loglevel error -stats as normal and
-    // the log file captures the same output shown in the window.
-    // FfmpegLogLevel: the -loglevel value used when VerboseLogging is on.
-    public bool   WriteLogFiles   { get; set; } = false;
-    public bool   VerboseLogging  { get; set; } = false;
-    public string FfmpegLogLevel  { get; set; } = "verbose";
+    // to <OutputDirectory>\Logs\<timestamp>\<FolderPath>\<n>.log.
+    //
+    // MkvMergeVerbose: only active when WriteLogFiles is on. When true,
+    // mkvmerge is invoked with -v (verbosity level 2), which adds
+    // Matroska element detail to the log file. mkvmerge's verbosity is
+    // cumulative — each additional -v raises the level — but level 2
+    // is the useful one for remux troubleshooting. Applies to Remux only.
+    //
+    // FfmpegVerboseLogging: only active when WriteLogFiles is on. When
+    // true, ffmpeg runs at FfmpegLogLevel (without -stats) and all
+    // output goes to the log file; the Run window shows an
+    // indeterminate progress bar. When false, ffmpeg runs with
+    // -loglevel error -stats as normal and the log file captures the
+    // same output shown in the window. Applies to Transcode only.
+    //
+    // FfmpegLogLevel: the -loglevel value used when
+    // FfmpegVerboseLogging is on.
+    public bool   WriteLogFiles        { get; set; } = false;
+    public bool   MkvMergeVerbose      { get; set; } = false;
+    public bool   FfmpegVerboseLogging { get; set; } = false;
+    public string FfmpegLogLevel       { get; set; } = "verbose";
 
     // ── Auto-move completed folders ──────────────────────────────────
     // When false (default), each output folder whose files all completed

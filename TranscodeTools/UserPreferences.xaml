@@ -428,7 +428,7 @@
                               Padding="20,16,20,16">
                     <StackPanel>
 
-                        <!-- Write Log Files -->
+                        <!-- Write Log Files — master toggle for both sub-sections -->
                         <CheckBox x:Name="ChkWriteLogFiles"
                                   Content="Write Log Files"
                                   HorizontalAlignment="Left"
@@ -436,22 +436,45 @@
                                   Checked="ChkWriteLogFiles_Changed"
                                   Unchecked="ChkWriteLogFiles_Changed"/>
                         <TextBlock Style="{StaticResource HintText}"
+                                   Margin="0,0,0,12"
                                    Text="Writes a log file per processed file to &lt;OutputDirectory&gt;\Logs\&lt;timestamp&gt;\. Failed files are named with a -FAILED suffix."/>
 
-                        <!-- Verbose Logging — child of Write Log Files -->
-                        <CheckBox x:Name="ChkVerboseLogging"
-                                  Content="Verbose Logging"
+                        <!-- ══════════ Remux sub-section ══════════ -->
+                        <TextBlock Text="Remux"
+                                   Foreground="{DynamicResource SubtleForeground}"
+                                   FontSize="11" FontWeight="SemiBold"
+                                   Margin="0,0,0,6"/>
+
+                        <CheckBox x:Name="ChkMkvMergeVerbose"
+                                  Content="mkvmerge Verbose Logging"
                                   HorizontalAlignment="Left"
                                   IsEnabled="False"
                                   Margin="22,0,0,4"
-                                  Checked="ChkVerboseLogging_Changed"
-                                  Unchecked="ChkVerboseLogging_Changed"/>
+                                  Checked="ChkMkvMergeVerbose_Changed"
+                                  Unchecked="ChkMkvMergeVerbose_Changed"/>
                         <TextBlock Style="{StaticResource HintText}"
-                                   Margin="44,0,0,0"
+                                   Margin="44,0,0,14"
+                                   Text="Invokes mkvmerge with -v, raising verbosity to level 2. Adds Matroska element detail to the log file — useful for diagnosing remux issues."/>
+
+                        <!-- ══════════ Transcode sub-section ══════════ -->
+                        <TextBlock Text="Transcode"
+                                   Foreground="{DynamicResource SubtleForeground}"
+                                   FontSize="11" FontWeight="SemiBold"
+                                   Margin="0,0,0,6"/>
+
+                        <CheckBox x:Name="ChkFfmpegVerboseLogging"
+                                  Content="ffmpeg Verbose Logging"
+                                  HorizontalAlignment="Left"
+                                  IsEnabled="False"
+                                  Margin="22,0,0,4"
+                                  Checked="ChkFfmpegVerboseLogging_Changed"
+                                  Unchecked="ChkFfmpegVerboseLogging_Changed"/>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Margin="44,0,0,4"
                                    Text="Redirects all ffmpeg output to the log file. The Run window shows an animated progress ticker instead of live stats."/>
 
                         <!-- ffmpeg Log Level -->
-                        <StackPanel Orientation="Horizontal" Margin="22,4,0,16">
+                        <StackPanel Orientation="Horizontal" Margin="44,4,0,16">
                             <TextBlock Text="ffmpeg Log Level:"
                                        Style="{StaticResource PrefLabel}"
                                        VerticalAlignment="Center"/>

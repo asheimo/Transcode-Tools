@@ -53,7 +53,8 @@ public partial class UserPreferences : Window
         bool   ResolutionVerifyAlways,
         bool   AutoCorrectResolutionMismatch,
         bool   WriteLogFiles,
-        bool   VerboseLogging,
+        bool   MkvMergeVerbose,
+        bool   FfmpegVerboseLogging,
         string FfmpegLogLevel,
         bool   DisableMoveCompleted
     );
@@ -91,7 +92,8 @@ public partial class UserPreferences : Window
             s.ResolutionVerifyAlways,
             s.AutoCorrectResolutionMismatch,
             s.WriteLogFiles,
-            s.VerboseLogging,
+            s.MkvMergeVerbose,
+            s.FfmpegVerboseLogging,
             s.FfmpegLogLevel,
             s.DisableMoveCompleted
         );
@@ -162,14 +164,16 @@ public partial class UserPreferences : Window
         ChkAutoCorrectResolutionMismatch.IsEnabled = s.ResolutionVerifyAlways;
 
         // Run tab
-        ChkWriteLogFiles.IsChecked   = s.WriteLogFiles;
-        ChkVerboseLogging.IsChecked  = s.VerboseLogging;
-        ChkVerboseLogging.IsEnabled  = s.WriteLogFiles;
-        CbxFfmpegLogLevel.SelectedItem = s.FfmpegLogLevel;
+        ChkWriteLogFiles.IsChecked          = s.WriteLogFiles;
+        ChkMkvMergeVerbose.IsChecked        = s.MkvMergeVerbose;
+        ChkMkvMergeVerbose.IsEnabled        = s.WriteLogFiles;
+        ChkFfmpegVerboseLogging.IsChecked   = s.FfmpegVerboseLogging;
+        ChkFfmpegVerboseLogging.IsEnabled   = s.WriteLogFiles;
+        CbxFfmpegLogLevel.SelectedItem      = s.FfmpegLogLevel;
         if (CbxFfmpegLogLevel.SelectedItem == null) CbxFfmpegLogLevel.SelectedIndex = 2; // verbose
-        CbxFfmpegLogLevel.IsEnabled  = s.WriteLogFiles && s.VerboseLogging;
-        ChkAutoMoveCompleted.IsChecked = s.DisableMoveCompleted;
-        TbxHistorySize.Text            = s.RecentFolderHistorySize.ToString();
+        CbxFfmpegLogLevel.IsEnabled         = s.WriteLogFiles && s.FfmpegVerboseLogging;
+        ChkAutoMoveCompleted.IsChecked      = s.DisableMoveCompleted;
+        TbxHistorySize.Text                 = s.RecentFolderHistorySize.ToString();
     }
 
     // ── SaveSettings ─────────────────────────────────────────────────
@@ -219,9 +223,10 @@ public partial class UserPreferences : Window
             .ToList();
 
         // Run
-        s.WriteLogFiles  = ChkWriteLogFiles.IsChecked == true;
-        s.VerboseLogging = ChkVerboseLogging.IsChecked == true;
-        s.FfmpegLogLevel = CbxFfmpegLogLevel.SelectedItem as string ?? "verbose";
+        s.WriteLogFiles        = ChkWriteLogFiles.IsChecked == true;
+        s.MkvMergeVerbose      = ChkMkvMergeVerbose.IsChecked == true;
+        s.FfmpegVerboseLogging = ChkFfmpegVerboseLogging.IsChecked == true;
+        s.FfmpegLogLevel       = CbxFfmpegLogLevel.SelectedItem as string ?? "verbose";
         s.DisableMoveCompleted = ChkAutoMoveCompleted.IsChecked == true;
         if (int.TryParse(TbxHistorySize.Text, out var histSize) && histSize > 0)
             s.RecentFolderHistorySize = histSize;
@@ -277,7 +282,8 @@ public partial class UserPreferences : Window
         s.ResolutionVerifyAlways          = _snapshot.ResolutionVerifyAlways;
         s.AutoCorrectResolutionMismatch   = _snapshot.AutoCorrectResolutionMismatch;
         s.WriteLogFiles           = _snapshot.WriteLogFiles;
-        s.VerboseLogging          = _snapshot.VerboseLogging;
+        s.MkvMergeVerbose         = _snapshot.MkvMergeVerbose;
+        s.FfmpegVerboseLogging    = _snapshot.FfmpegVerboseLogging;
         s.FfmpegLogLevel          = _snapshot.FfmpegLogLevel;
         s.DisableMoveCompleted    = _snapshot.DisableMoveCompleted;
 
@@ -301,8 +307,10 @@ public partial class UserPreferences : Window
     }
 
     // ── Run tab — logging enable/disable chain ───────────────────────
-    // Write Log Files controls whether Verbose Logging is enabled.
-    // Verbose Logging controls whether the log level dropdown is enabled.
+    // Write Log Files is the master toggle for both logging verbosity
+    // checkboxes. mkvmerge verbose applies to remux; ffmpeg verbose
+    // applies to transcode. ffmpeg verbose also gates the log level
+    // dropdown.
 
     private void ChkResolutionVerifyAlways_Changed(object sender, RoutedEventArgs e)
     {
@@ -315,17 +323,27 @@ public partial class UserPreferences : Window
     private void ChkWriteLogFiles_Changed(object sender, RoutedEventArgs e)
     {
         var writeOn = ChkWriteLogFiles.IsChecked == true;
-        ChkVerboseLogging.IsEnabled = writeOn;
+        ChkMkvMergeVerbose.IsEnabled      = writeOn;
+        ChkFfmpegVerboseLogging.IsEnabled = writeOn;
         if (!writeOn)
         {
-            ChkVerboseLogging.IsChecked = false;
-            CbxFfmpegLogLevel.IsEnabled = false;
+            ChkMkvMergeVerbose.IsChecked      = false;
+            ChkFfmpegVerboseLogging.IsChecked = false;
+            CbxFfmpegLogLevel.IsEnabled       = false;
         }
     }
 
-    private void ChkVerboseLogging_Changed(object sender, RoutedEventArgs e)
+    private void ChkMkvMergeVerbose_Changed(object sender, RoutedEventArgs e)
     {
-        var verboseOn = ChkVerboseLogging.IsChecked == true;
+        // No dependent controls — handler exists so the checkbox's
+        // Checked/Unchecked events can be wired in XAML symmetrically
+        // with the other logging checkboxes. SaveSettings picks up the
+        // new value when the dialog is OK'd.
+    }
+
+    private void ChkFfmpegVerboseLogging_Changed(object sender, RoutedEventArgs e)
+    {
+        var verboseOn = ChkFfmpegVerboseLogging.IsChecked == true;
         CbxFfmpegLogLevel.IsEnabled = verboseOn;
         if (!verboseOn)
             CbxFfmpegLogLevel.SelectedItem = "verbose";

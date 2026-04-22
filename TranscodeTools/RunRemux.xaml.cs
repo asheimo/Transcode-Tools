@@ -730,7 +730,13 @@ public partial class RunRemux : Window
 
             if (_cancelRequested)
             {
-                AppendLog("Job cancelled. Waiting for folder moves to complete\u2026");
+                // Cancel message depends on whether auto-move is active.
+                // When auto-move is disabled the "waiting for folder moves"
+                // wording is a lie — no worker is running, nothing to wait
+                // for. Keep the message truthful so the user isn't misled.
+                AppendLog(AppSettings.Instance.DisableMoveCompleted
+                    ? "Job cancelled."
+                    : "Job cancelled. Waiting for folder moves to complete\u2026");
                 break;
             }
 
@@ -941,9 +947,10 @@ public partial class RunRemux : Window
         var settingsFile = Path.Combine(_inputDirectory, modeFolder,
                                file.FolderName, nameNoExt + ".txt");
 
-        var settings        = AppSettings.Instance;
-        var writeLog        = settings.WriteLogFiles;
-        var verboseLogging  = writeLog && settings.VerboseLogging;
+        var settings             = AppSettings.Instance;
+        var writeLog             = settings.WriteLogFiles;
+        var ffmpegVerboseLogging = writeLog && settings.FfmpegVerboseLogging;
+        var mkvMergeVerbose      = writeLog && settings.MkvMergeVerbose;
 
         // Test mode: encode 5 minutes from 10:00 into the source.
         // Only active in transcode mode — read once here and applied
@@ -991,8 +998,15 @@ public partial class RunRemux : Window
                 // Saved commands always contain -loglevel error -stats (non-verbose).
                 // We replace that token pair with the verbose flags at runtime so
                 // the file on disk always reflects the canonical non-verbose form.
-                if (verboseLogging && _isTranscodeMode)
+                if (ffmpegVerboseLogging && _isTranscodeMode)
                     command = SwapLogFlags(command);
+
+                // Remux verbose: mkvmerge's "-v" raises verbosity by one level
+                // (default level 1 → level 2). Level 2 prints Matroska element
+                // details — useful for remux troubleshooting. Inject at runtime
+                // so the on-disk settings file stays canonical.
+                if (mkvMergeVerbose && !_isTranscodeMode)
+                    command = InjectMkvMergeVerbose(command);
 
                 // Test mode: inject -ss/-t and redirect output to Test\ subfolder.
                 // Applied after verbose swap so the on-disk command is never touched.
@@ -1027,7 +1041,7 @@ public partial class RunRemux : Window
 
                     await LogTranscodeSummaryAsync(command, logWriter);
                     int exitCode1 = await RunProcessAsync(exe, args, logWriter: logWriter,
-                                          verboseLogging: verboseLogging);
+                                          verboseLogging: ffmpegVerboseLogging);
                     if (exitCode1 != 0)
                         _foldersWithErrors.Add(file.FolderName);
                 }
@@ -1066,7 +1080,7 @@ public partial class RunRemux : Window
                     var command = CommandBuilder.BuildTranscodeCommand(
                         _outputDirectory, file.FolderName, file.FileName,
                         _inputDirectory, videoTracks, audioTracks, subtitleTracks,
-                        verboseLogging);
+                        ffmpegVerboseLogging);
 
                     // No settings file — run from defaults but do NOT save to disk.
                     // The user should explicitly save settings from the main window.
@@ -1093,7 +1107,7 @@ public partial class RunRemux : Window
                         : command.Substring(command.IndexOf(' ') + 1).Trim();
 
                     int exitCode3 = await RunProcessAsync(exe, args, logWriter: logWriter,
-                                          verboseLogging: verboseLogging);
+                                          verboseLogging: ffmpegVerboseLogging);
                     if (exitCode3 != 0)
                         _foldersWithErrors.Add(file.FolderName);
                 }
@@ -1154,6 +1168,22 @@ public partial class RunRemux : Window
         command = command.Replace("-loglevel error -stats", verboseStr);
         command = command.Replace("-loglevel error", verboseStr);
         return command;
+    }
+
+    // Injects "-v " right after the quoted mkvmerge executable path so
+    // mkvmerge runs at verbosity level 2 (default is 1). Called at
+    // runtime only; the file on disk stores the non-verbose form.
+    //
+    // Expected command shape: "X:\...\mkvmerge.exe" --output "..." ...
+    // We find the closing quote of the exe path and insert " -v"
+    // immediately after it. If the command doesn't start with a quote
+    // (which shouldn't happen for mkvmerge), we no-op to stay safe.
+    private static string InjectMkvMergeVerbose(string command)
+    {
+        if (!command.StartsWith("\"")) return command;
+        var endQuote = command.IndexOf('"', 1);
+        if (endQuote < 0) return command;
+        return command.Substring(0, endQuote + 1) + " -v" + command.Substring(endQuote + 1);
     }
 
     // Modifies a transcode command for test mode:

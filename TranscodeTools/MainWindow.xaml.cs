@@ -1506,19 +1506,20 @@ public partial class MainWindow : Window
         //
         // Burn detection: the burned track appears as [0:s:N] inside
         // filter_complex — it is NOT mapped via -map 0:s:N in the output.
+        //
+        // Note: command.Split(' ') collapses the whole quoted
+        // -filter_complex value into one token that starts with "[0:v]…,
+        // so a StartsWith("[0:s:") scan never matches. We instead regex
+        // the raw command string. This is unambiguous — bracketed
+        // [0:s:N] only ever appears inside filter_complex; mapped
+        // subtitle tracks use the un-bracketed form -map 0:s:N.
         int savedBurnIndex = -1;
-        var fcToken = tokens.FirstOrDefault(t =>
-            t.StartsWith("[0:s:", StringComparison.OrdinalIgnoreCase));
-        if (fcToken != null)
+        var burnMatch = System.Text.RegularExpressions.Regex.Match(
+            command, @"\[0:s:(\d+)\]");
+        if (burnMatch.Success &&
+            int.TryParse(burnMatch.Groups[1].Value, out var burnIdx))
         {
-            // fcToken looks like "[0:s:0]fps=..." — extract the N
-            var start = "[0:s:".Length;
-            var end   = fcToken.IndexOf(']');
-            if (end > start &&
-                int.TryParse(fcToken.Substring(start, end - start), out var bi))
-            {
-                savedBurnIndex = bi;
-            }
+            savedBurnIndex = burnIdx;
         }
 
         for (int i = 0; i < TranscodeSubtitleTracks.Count; i++)
