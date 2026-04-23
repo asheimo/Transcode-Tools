@@ -162,6 +162,19 @@ public class RemuxSubtitleTrack : ObservableBase
         set { _language = value; OnPropertyChanged(); }
     }
 
+    // Title — user-editable track name. Probed from tags.title at load
+    // time, editable via right-click "Edit Title…" context menu on the
+    // Remux subtitle list. Emitted as --track-name TID:"value" in the
+    // mkvmerge command when non-empty. Carries through any subsequent
+    // transcode automatically — the mkv file written by mkvmerge holds
+    // the track name in its Matroska header, which -c:s copy preserves.
+    private string _title = "";
+    public string Title
+    {
+        get => _title;
+        set { _title = value; OnPropertyChanged(); }
+    }
+
     private string _frameCount = "";
     public string FrameCount
     {

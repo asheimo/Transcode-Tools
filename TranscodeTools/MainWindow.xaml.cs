@@ -1310,6 +1310,30 @@ public partial class MainWindow : Window
             foreach (var track in RemuxSubtitleTracks)
                 track.IsSelected = subtitleIndexes.Contains(track.OriginalTrackIndex);
         }
+
+        // ── Restore subtitle titles ───────────────────────────────────
+        // Saved commands emit --track-name TID:"value" for each subtitle
+        // track with a non-empty Title. We match by OriginalTrackIndex.
+        //
+        // Semantics: if the saved command has --track-name for a track
+        // we overwrite the ffprobe-seeded title. If it doesn't, we leave
+        // the ffprobe value in place — this matches mkvmerge's behavior
+        // (without --track-name, the source Matroska Name is preserved
+        // unchanged in the output).
+        //
+        // Audio --track-name is not currently emitted by CommandBuilder,
+        // so this loop only affects subtitles. We defensively guard
+        // against a future audio --track-name addition by only assigning
+        // to RemuxSubtitleTracks.
+        var titleMatches = System.Text.RegularExpressions.Regex.Matches(
+            command, "--track-name\\s+(\\d+):\"([^\"]*)\"");
+        foreach (System.Text.RegularExpressions.Match m in titleMatches)
+        {
+            if (!int.TryParse(m.Groups[1].Value, out var tid)) continue;
+            var title = m.Groups[2].Value;
+            var sub = RemuxSubtitleTracks.FirstOrDefault(t => t.OriginalTrackIndex == tid);
+            if (sub != null) sub.Title = title;
+        }
     }
 
     // ── Restore Transcode track state from a saved ffmpeg command ─────
@@ -1782,6 +1806,35 @@ public partial class MainWindow : Window
 
     private void SubtitleList_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
         => ToggleRowSelection<RemuxSubtitleTrack>(RemuxSubtitleList, e);
+
+    // ── Right-click on subtitle row: select first, then let the
+    // attached ContextMenu open. WPF doesn't auto-select on right-click
+    // for ListView, so without this the context menu would act on
+    // whatever was previously selected (or nothing). We walk up from
+    // the hit element to the ListViewItem and flip its IsSelected.
+    private void RemuxSubtitleList_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        var hit  = RemuxSubtitleList.InputHitTest(e.GetPosition(RemuxSubtitleList)) as DependencyObject;
+        var item = FindAncestor<ListViewItem>(hit);
+        if (item != null)
+            item.IsSelected = true;
+    }
+
+    // ── Edit Title… context menu handler ─────────────────────────────
+    // Opens the shared rename-style dialog seeded with the current
+    // title. On OK the bound row's Title property is updated, which
+    // the ListView picks up via INotifyPropertyChanged. An empty
+    // result clears the title (CommandBuilder skips empty titles).
+    private void EditSubtitleTitle_Click(object sender, RoutedEventArgs e)
+    {
+        if (RemuxSubtitleList.SelectedItem is not RemuxSubtitleTrack track)
+            return;
+
+        var newTitle = ShowEditTitleDialog(track.Title);
+        if (newTitle == null) return; // cancelled
+
+        track.Title = newTitle;
+    }
 
     // ── Drag and drop implementation ─────────────────────────────────
 
@@ -2463,6 +2516,106 @@ public partial class MainWindow : Window
         {
             textBox.Focus();
             textBox.CaretIndex = textBox.Text.Length;
+        };
+
+        win.ShowDialog();
+        return result;
+    }
+
+    // ── ShowEditTitleDialog ──────────────────────────────────────────
+    // Modal dialog for editing a subtitle track title. Same shape as
+    // ShowRenameDialog but with different validation:
+    //   - Empty input is allowed — returns "" to clear the title
+    //   - Only whitespace is treated as empty and trimmed
+    //   - No duplicate-name or filesystem checks (this is metadata,
+    //     not a file path)
+    // Returns null on cancel, the entered string (possibly empty) on OK.
+    // The text is pre-selected on open so a fresh title replaces the old.
+    private string? ShowEditTitleDialog(string currentTitle)
+    {
+        var win = new Window
+        {
+            Title                 = "Edit Subtitle Title",
+            Width                 = 500,
+            Height                = 140,
+            MinWidth              = 350,
+            MinHeight             = 140,
+            MaxHeight             = 140,
+            Owner                 = this,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Background            = (System.Windows.Media.Brush)FindResource("WindowBg"),
+            ResizeMode            = ResizeMode.NoResize,
+            ShowInTaskbar         = false
+        };
+
+        var grid = new Grid { Margin = new Thickness(12) };
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(8) });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+        var textBox = new TextBox
+        {
+            Text                     = currentTitle,
+            FontSize                 = 13,
+            Foreground               = (System.Windows.Media.Brush)FindResource("ForegroundColor"),
+            Background               = (System.Windows.Media.Brush)FindResource("InputBg"),
+            BorderBrush              = (System.Windows.Media.Brush)FindResource("BorderColor"),
+            BorderThickness          = new Thickness(1),
+            Padding                  = new Thickness(6, 4, 6, 4),
+            VerticalContentAlignment = VerticalAlignment.Center
+        };
+        Grid.SetRow(textBox, 0);
+
+        var buttonPanel = new StackPanel
+        {
+            Orientation         = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right
+        };
+
+        var cancelBtn = new Button
+        {
+            Content = "Cancel",
+            Width   = 80,
+            Margin  = new Thickness(0, 0, 8, 0),
+            Style   = (Style)FindResource("FlatButton")
+        };
+
+        var okBtn = new Button
+        {
+            Content   = "OK",
+            Width     = 80,
+            Style     = (Style)FindResource("AccentButton"),
+            IsDefault = true
+        };
+
+        buttonPanel.Children.Add(cancelBtn);
+        buttonPanel.Children.Add(okBtn);
+        Grid.SetRow(buttonPanel, 2);
+
+        grid.Children.Add(textBox);
+        grid.Children.Add(buttonPanel);
+        win.Content = grid;
+
+        string? result = null;
+
+        okBtn.Click += (_, _) =>
+        {
+            result = textBox.Text.Trim();   // empty allowed — clears the title
+            win.DialogResult = true;
+            win.Close();
+        };
+
+        cancelBtn.Click += (_, _) =>
+        {
+            win.DialogResult = false;
+            win.Close();
+        };
+
+        // Focus and select-all on open so typing overwrites the current value.
+        win.Loaded += (_, _) =>
+        {
+            textBox.Focus();
+            textBox.SelectAll();
         };
 
         win.ShowDialog();

@@ -384,6 +384,7 @@ public static class FfprobeService
             OriginalTrackIndex = index,
             SubtitleFormat     = s["codec_name"]?.GetValue<string>() ?? "",
             Language           = tags?["language"]?.GetValue<string>() ?? "",
+            Title              = tags?["title"]?.GetValue<string>()    ?? "",
             // Frame count is stored as a MakeMKV tag, not a top-level field.
             // Try "NUMBER_OF_FRAMES-eng" first, then "NUMBER_OF_FRAMES" without
             // the language suffix — matching exactly what the original app did.

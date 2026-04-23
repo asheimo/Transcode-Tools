@@ -502,7 +502,10 @@
 
                     <TextBlock Grid.Row="6" Text="SUBTITLES" Style="{StaticResource SectionLabel}"/>
 
-                    <!-- Subtitles — selectable rows, drag to reorder, no Title column -->
+                    <!-- Subtitles — selectable rows, drag to reorder.
+                         Right-click → "Edit Title…" opens a dialog that
+                         updates the bound row's Title property. The
+                         column itself is display-only. -->
                     <ListView Grid.Row="7"
                               x:Name="RemuxSubtitleList"
                               BorderThickness="1"
@@ -513,7 +516,14 @@
                               PreviewMouseLeftButtonDown="SubtitleList_PreviewMouseLeftButtonDown"
                               PreviewMouseMove="SubtitleList_PreviewMouseMove"
                               MouseLeftButtonUp="SubtitleList_MouseLeftButtonUp"
+                              PreviewMouseRightButtonDown="RemuxSubtitleList_PreviewMouseRightButtonDown"
                               Drop="SubtitleList_Drop">
+                        <ListView.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="Edit Title…"
+                                          Click="EditSubtitleTitle_Click"/>
+                            </ContextMenu>
+                        </ListView.ContextMenu>
                         <ListView.View>
                             <GridView>
                                 <GridViewColumn Width="30">
@@ -525,6 +535,7 @@
                                 </GridViewColumn>
                                 <GridViewColumn Header="Subtitle Format" Width="150" DisplayMemberBinding="{Binding SubtitleFormat}"/>
                                 <GridViewColumn Header="Language"        Width="90"  DisplayMemberBinding="{Binding Language}"/>
+                                <GridViewColumn Header="Title"           Width="160" DisplayMemberBinding="{Binding Title}"/>
                                 <GridViewColumn Header="# of Frames"     Width="100" DisplayMemberBinding="{Binding FrameCount}"/>
                                 <GridViewColumn Header="Default"         Width="70">
                                     <GridViewColumn.CellTemplate>

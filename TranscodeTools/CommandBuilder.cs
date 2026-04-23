@@ -118,6 +118,19 @@ public static class CommandBuilder
         {
             var subIndexes = selectedSubtitles.Select(t => t.OriginalTrackIndex.ToString());
             sb.Append($" --subtitle-tracks {string.Join(",", subIndexes)}");
+
+            // Per-track names: mkvmerge --track-name <TID>:"name" writes
+            // the Matroska "Name" header element. Only emit when the user
+            // actually has a title set — empty string means "use source
+            // value" (or, for untitled source tracks, leave it blank).
+            // Any double-quote in the title is stripped defensively since
+            // it would break argument quoting; backslash is left alone
+            // (mkvmerge treats it literally, not as an escape).
+            foreach (var t in selectedSubtitles.Where(t => !string.IsNullOrWhiteSpace(t.Title)))
+            {
+                var safeTitle = t.Title.Replace("\"", "");
+                sb.Append($" --track-name {t.OriginalTrackIndex}:\"{safeTitle}\"");
+            }
         }
         else
         {
