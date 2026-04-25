@@ -11,20 +11,40 @@ they are easier to use and batch friendly at the same time.
 
 ## Installation
 
-The application is portable so really the installation for it is simple. 
-The applications depends on the following:
-  ### For Primary functions
-  [FFmpeg](http://ffmpeg.org/)
-  
-  [ffprobe](http://ffmpeg.org/)
-  
-  
-  ### For ancillary functions
-  mpv
-  
-  subtitleedit
+The application is portable — no installer required.
 
-All of these should be made available through the system Path
+1. Download `TranscodeTools-1.0.0-win-x64.zip` from the [latest release](https://github.com/asheimo/Transcode-Tools/releases/latest)
+2. Extract all files to a folder of your choice — keep `TranscodeTools.exe` and the bundled `*_cor3.dll` files together
+3. Run `TranscodeTools.exe`
+4. On first launch, open User Preferences → Tool Paths and set the paths to the dependencies below
+
+### System Requirements
+
+- Windows x64
+- NVIDIA GPU with NVENC (RTX 30-series or newer recommended) **or** Intel GPU with QSV
+- No .NET runtime installation required (self-contained build)
+
+### Dependencies
+
+Transcode Tools is a UI wrapper — the actual work is done by external command-line tools. You'll need to install these separately and either add them to your system `PATH` or point Transcode Tools at the `.exe` files directly via User Preferences → Tool Paths.
+
+#### Primary functions (required)
+
+| Tool | Purpose | Download |
+|------|---------|----------|
+| **MKVToolNix** (`mkvmerge.exe`) | MKV remuxing and container manipulation | [mkvtoolnix.download](https://mkvtoolnix.download/downloads.html#windows) |
+| **FFmpeg** (`ffmpeg.exe`) | Video/audio transcoding with hardware acceleration | [ffmpeg.org](https://ffmpeg.org/download.html#build-windows) |
+| **FFprobe** (`ffprobe.exe`) | Media stream analysis (ships with FFmpeg) | Included in the FFmpeg download |
+| **Robocopy** (`robocopy.exe`) | Folder operations | Built into Windows — no install needed |
+
+For FFmpeg/FFprobe, the [gyan.dev builds](https://www.gyan.dev/ffmpeg/builds/) are recommended (download the "release full" or "release essentials" build). Make sure the build includes NVENC and/or QSV support — both gyan.dev and BtbN builds do.
+
+#### Ancillary functions (optional)
+
+| Tool | Purpose | Download |
+|------|---------|----------|
+| **mpv** | Quick video preview from within the app | [mpv.io](https://mpv.io/installation/) |
+| **Subtitle Edit** | Inspect and edit subtitle tracks | [nikse.dk](https://www.nikse.dk/subtitleedit) |
 
 ## Usage
 The design is simple. It expects that you have already ripped your movies and named them properly (based on Plex naming standards). Once you launch the program it defaults to Remux mode. If you already have your files ready for the transcode process you can switch modes and start making settings for transcoding.
