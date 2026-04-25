@@ -8,6 +8,8 @@
     <UseWPF>true</UseWPF>
     <AssemblyName>TranscodeTools</AssemblyName>
     <RootNamespace>TranscodeTools</RootNamespace>
+    <Title>Transcode Tools</Title>
+    <FileVersion>1,0</FileVersion>
   </PropertyGroup>
 
 </Project>
