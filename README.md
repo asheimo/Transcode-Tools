@@ -49,6 +49,8 @@ For FFmpeg/FFprobe, the [gyan.dev builds](https://www.gyan.dev/ffmpeg/builds/) a
 ## Usage
 The design is simple. It expects that you have already ripped your movies and named them properly (based on Plex naming standards). Once you launch the program it defaults to Remux mode. If you already have your files ready for the transcode process you can switch modes and start making settings for transcoding.
 
+**More detailed user guide in process**
+
 ### Remuxing
 Choose your input directory. The program is expecting you to select a folder that has the folders of the movies you wish to process.
 Choose your output directory, This will be used when creating the settings files. The preferred would be an empty directory but you can use a directory with movies already in it if you wish.
