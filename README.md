@@ -1,6 +1,6 @@
 # Transcode Tools
 
-GUI to remux and transcode videos based on the teachings and tools of [Lisa Melton](lisamelton.net)
+GUI to remux and transcode videos based on the teachings and tools of [Lisa Melton](https://lisamelton.net)
 
 ## About
 
