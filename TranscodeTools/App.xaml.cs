@@ -10,6 +10,8 @@
 // then keep watching for theme changes while the app runs.
 // ============================================================
 
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Windows;
 using Microsoft.Win32; // Needed to read the Windows registry
 
@@ -21,11 +23,72 @@ namespace TranscodeTools;
 // In VB.NET: Partial Public Class App
 public partial class App : Application
 {
+    // ── Single-instance guard ─────────────────────────────────────────
+    // A Mutex is a kernel-level lock with a globally unique name. Only
+    // one process at a time can "own" a named mutex, so we use it as
+    // the canonical "is TranscodeTools already running?" signal.
+    //
+    // Why a field on the App class: we need the mutex to live as long as
+    // the process does. If it went out of scope (e.g. local variable in
+    // OnStartup), the GC could finalize it, releasing the lock and
+    // letting a second instance start while the first is still running.
+    // Holding it as a field keeps it alive for the application lifetime.
+    //
+    // The "Local\\" prefix scopes the mutex to the current Windows user
+    // session. Two different users on the same machine can each run
+    // their own instance — only same-user duplicates are blocked. Use
+    // "Global\\" instead if you ever want to block across user sessions.
+    private const string SingleInstanceMutexName = "Local\\TranscodeTools_SingleInstance_v1";
+    private System.Threading.Mutex? _singleInstanceMutex;
+
+    // Win32 imports for activating the existing instance's window.
+    // user32.dll exposes the windowing functions Windows itself uses
+    // for taskbar clicks, alt-tab, etc.
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(System.IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsIconic(System.IntPtr hWnd);  // "iconic" = minimised
+
+    private const int SW_RESTORE = 9;  // Restore a minimised window
+
     // OnStartup is called once when the application first launches.
     // It's the equivalent of Sub Main() or Form_Load in VB.NET.
     // "override" means we're replacing the base class version of this method.
     protected override void OnStartup(StartupEventArgs e)
     {
+        // ── Single-instance check (must run BEFORE base.OnStartup) ────
+        // We try to create-and-immediately-acquire the named mutex.
+        // The "out createdNew" parameter tells us whether we made it
+        // fresh (true → we're the first instance) or attached to an
+        // existing one (false → another instance owns it).
+        _singleInstanceMutex = new System.Threading.Mutex(
+            initiallyOwned: true,
+            name:           SingleInstanceMutexName,
+            createdNew:     out bool createdNew);
+
+        if (!createdNew)
+        {
+            // Another instance is running. Bring its main window to the
+            // foreground, show the user a message, then exit cleanly.
+            ActivateExistingInstance();
+
+            MessageBox.Show(
+                "TranscodeTools is already running.",
+                "Already Running",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+
+            // Shutdown() ends the WPF app loop. Returning here without
+            // calling it would still run the rest of OnStartup, which
+            // we don't want — no theme load, no MainWindow construction.
+            Shutdown();
+            return;
+        }
+
         // Always call the base class version first so WPF can do its own setup.
         // In VB.NET: MyBase.OnStartup(e)
         base.OnStartup(e);
@@ -45,6 +108,49 @@ public partial class App : Application
                 // WPF (like WinForms) requires UI updates to happen on the main thread.
                 Dispatcher.Invoke(ApplySystemTheme);
         };
+    }
+
+    // OnExit fires when the WPF app is shutting down. Release the mutex
+    // explicitly here. Windows would clean it up on process exit anyway,
+    // but explicit release is cleaner and avoids any edge cases where
+    // the kernel hasn't reclaimed it before a quick relaunch.
+    protected override void OnExit(ExitEventArgs e)
+    {
+        if (_singleInstanceMutex != null)
+        {
+            try { _singleInstanceMutex.ReleaseMutex(); } catch { /* not owned — fine */ }
+            _singleInstanceMutex.Dispose();
+            _singleInstanceMutex = null;
+        }
+        base.OnExit(e);
+    }
+
+    // Find the existing TranscodeTools process and bring its main window
+    // to the foreground. If the window is minimised, restore it first.
+    //
+    // Caveat: Windows sometimes refuses foreground swaps from background
+    // processes (anti-focus-stealing protection). When that happens
+    // SetForegroundWindow returns false and the taskbar icon flashes
+    // instead — which is fine, the user still notices.
+    private static void ActivateExistingInstance()
+    {
+        // Process.GetCurrentProcess().Id is OUR PID; we want the OTHER
+        // TranscodeTools process. GetProcessesByName returns all processes
+        // matching the executable name (without .exe).
+        var current  = Process.GetCurrentProcess();
+        var existing = Process.GetProcessesByName(current.ProcessName)
+                              .FirstOrDefault(p => p.Id != current.Id);
+
+        if (existing == null) return;  // Mutex disagrees with process list; nothing to do
+
+        var hWnd = existing.MainWindowHandle;
+        if (hWnd == System.IntPtr.Zero) return;  // Window not yet created
+
+        // If minimised, restore before bringing to front
+        if (IsIconic(hWnd))
+            ShowWindow(hWnd, SW_RESTORE);
+
+        SetForegroundWindow(hWnd);
     }
 
     // "public static" means this method can be called from anywhere without

@@ -98,7 +98,16 @@ public partial class RunRemux : Window
         // Update window title to match mode
         Title = isTranscodeMode ? "Run Transcode" : "Run Remux";
 
-        Closed += (_, _) => RunCompleted?.Invoke(this, EventArgs.Empty);
+        Closed += (_, _) =>
+        {
+            // Defensive: if the window is closed before StartBtn_Click's
+            // cleanup runs (unusual but possible), release the keep-awake
+            // so we don't leave the display pinned on after the window
+            // is gone. Release() is idempotent — safe even if no Acquire
+            // happened.
+            PowerKeepAwake.Release();
+            RunCompleted?.Invoke(this, EventArgs.Empty);
+        };
     }
 
     // Raised when the Run window closes. MainWindow subscribes to this
@@ -685,6 +694,14 @@ public partial class RunRemux : Window
         ShowFilesCheckBox.IsEnabled = false;
         OutputLog.Clear();
 
+        // Keep system + display awake for the duration of the run.
+        // Without this, Windows can sleep mid-job (idle timer fires
+        // even though ffmpeg is busy), and a sleeping display puts
+        // the NVIDIA GPU into a low-power state that stalls NVENC
+        // encode sessions. Released in the cleanup block at the end
+        // of this method, and defensively in OnClosed.
+        PowerKeepAwake.Acquire();
+
         // Create a single timestamp folder for this entire run
         _runTimestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
         _lastRunLogPaths.Clear();
@@ -778,6 +795,10 @@ public partial class RunRemux : Window
         CancelCloseBtn.Content      = "Close";
         CancelCloseBtn.IsEnabled    = true;
         ShowFilesCheckBox.IsEnabled = true;
+
+        // Release the system/display keep-awake acquired at the top of
+        // this method. Windows resumes counting idle time from here.
+        PowerKeepAwake.Release();
 
         // Re-run the output check so folders completed in this run
         // get their ✓ checkmarks without needing to reopen the window.
