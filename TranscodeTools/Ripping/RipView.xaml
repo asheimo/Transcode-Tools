@@ -1,0 +1,238 @@
+<!-- ============================================================
+     RipView.xaml
+     Rip mode's content. Shown by MainWindow in place of the shared
+     Remux/Transcode layout when the "Rip" mode button is checked.
+
+     Layout:
+       Destination line (full width)
+       drives box            |  jobs in flight
+       left column (270)     |  chip strip (fixed height)
+         discs -> disc titles|  menu picture
+       status line
+
+     The left column is resizable. The splitter spans the drives/jobs
+     band and the main row, the same shared-column pattern the main
+     window uses for its pickers and browsers.
+     ============================================================ -->
+<UserControl x:Class="TranscodeTools.RipView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Loaded="RipView_Loaded"
+             Unloaded="RipView_Unloaded">
+
+    <UserControl.Resources>
+        <!-- Right-click menu on a disc row. x:Shared="False" gives each row
+             its own instance; one shared ContextMenu can only have one parent. -->
+        <ContextMenu x:Key="DiscRowMenu" x:Shared="False">
+            <MenuItem Header="Open Folder in Explorer"/>
+        </ContextMenu>
+
+        <!-- Disc rows: the theme's ListViewItem style plus the right-click menu.
+             BasedOn keeps the theme template; without it this style would
+             replace it. -->
+        <Style x:Key="DiscRowStyle" TargetType="ListViewItem"
+               BasedOn="{StaticResource {x:Type ListViewItem}}">
+            <Setter Property="ContextMenu" Value="{StaticResource DiscRowMenu}"/>
+        </Style>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="270" MinWidth="180"/>
+            <ColumnDefinition Width="8"/>
+            <ColumnDefinition Width="*" MinWidth="240"/>
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="32"/>     <!-- Destination -->
+            <RowDefinition Height="110"/>    <!-- Drives | jobs -->
+            <RowDefinition Height="*"/>      <!-- Left column | chips + picture -->
+            <RowDefinition Height="Auto"/>   <!-- Status -->
+        </Grid.RowDefinitions>
+
+        <!-- Destination line: same picker design as Input/Output Directory -->
+        <Grid Grid.Row="0" Grid.ColumnSpan="3">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Button Grid.Column="0"
+                    Content="Destination"
+                    Style="{StaticResource FlatButton}"
+                    Width="130"
+                    Margin="0,0,6,0"
+                    Click="DestinationButton_Click"/>
+            <ComboBox Grid.Column="1"
+                      x:Name="DestinationBox"
+                      IsEditable="True"
+                      IsReadOnly="True"
+                      SelectionChanged="DestinationBox_SelectionChanged"/>
+        </Grid>
+
+        <!-- Drives box -->
+        <ListView Grid.Row="1" Grid.Column="0"
+                  x:Name="DriveList"
+                  Margin="0,8,0,0"
+                  ScrollViewer.VerticalScrollBarVisibility="Auto">
+            <ListView.View>
+                <GridView>
+                    <GridViewColumn Header="Drive" Width="60"  DisplayMemberBinding="{Binding Letter}"/>
+                    <GridViewColumn Header="Disc"  Width="190" DisplayMemberBinding="{Binding Label}"/>
+                </GridView>
+            </ListView.View>
+        </ListView>
+
+        <!-- Jobs in flight -->
+        <ListView Grid.Row="1" Grid.Column="2"
+                  x:Name="JobList"
+                  Margin="0,8,0,0"
+                  ScrollViewer.VerticalScrollBarVisibility="Auto">
+            <ListView.View>
+                <GridView>
+                    <GridViewColumn Header="Disc"   Width="180"/>
+                    <GridViewColumn Header="Step"   Width="90"/>
+                    <GridViewColumn Header="Status" Width="260"/>
+                </GridView>
+            </ListView.View>
+        </ListView>
+
+        <!-- Adjustable splitter: spans the drives/jobs band and the main row -->
+        <GridSplitter Grid.Row="1" Grid.RowSpan="2" Grid.Column="1"
+                      HorizontalAlignment="Stretch"
+                      VerticalAlignment="Stretch"
+                      ResizeDirection="Columns"
+                      ResizeBehavior="PreviousAndNext"
+                      Background="Transparent">
+            <GridSplitter.Template>
+                <ControlTemplate TargetType="GridSplitter">
+                    <Grid Background="Transparent">
+                        <StackPanel Orientation="Vertical"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center">
+                            <Ellipse Width="4" Height="4" Fill="{DynamicResource SubtleForeground}" Margin="0,2,0,2"/>
+                            <Ellipse Width="4" Height="4" Fill="{DynamicResource SubtleForeground}" Margin="0,2,0,2"/>
+                            <Ellipse Width="4" Height="4" Fill="{DynamicResource SubtleForeground}" Margin="0,2,0,2"/>
+                        </StackPanel>
+                    </Grid>
+                </ControlTemplate>
+            </GridSplitter.Template>
+        </GridSplitter>
+
+        <!-- Left column: disc list, switching to the selected disc's titles -->
+        <Grid Grid.Row="2" Grid.Column="0" Margin="0,8,0,0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <!-- Shown only while a disc's titles are listed -->
+            <Grid x:Name="DiscTitlesHeader" Grid.Row="0"
+                  Margin="0,0,0,6"
+                  Visibility="Collapsed">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Button Grid.Column="0"
+                        Content="Back to discs"
+                        Style="{StaticResource FlatButton}"
+                        Padding="8,3"
+                        Margin="0,0,8,0"
+                        Click="BackToDiscs_Click"/>
+                <TextBlock Grid.Column="1"
+                           x:Name="SelectedDiscName"
+                           Foreground="{DynamicResource ForegroundColor}"
+                           FontSize="13"
+                           FontWeight="SemiBold"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis"/>
+            </Grid>
+
+            <ListView Grid.Row="1"
+                      x:Name="DiscList"
+                      ItemContainerStyle="{StaticResource DiscRowStyle}"
+                      ScrollViewer.VerticalScrollBarVisibility="Auto"
+                      SelectionChanged="DiscList_SelectionChanged">
+                <ListView.View>
+                    <GridView>
+                        <GridViewColumn Header="Disc" Width="250"/>
+                    </GridView>
+                </ListView.View>
+            </ListView>
+
+            <!-- One line per disc title: number, runtime, filename -->
+            <ListView Grid.Row="1"
+                      x:Name="TitleList"
+                      Visibility="Collapsed"
+                      ScrollViewer.VerticalScrollBarVisibility="Auto">
+                <ListView.View>
+                    <GridView>
+                        <GridViewColumn Header="#"       Width="36"/>
+                        <GridViewColumn Header="Runtime" Width="70"/>
+                        <GridViewColumn Header="File"    Width="150"/>
+                    </GridView>
+                </ListView.View>
+            </ListView>
+        </Grid>
+
+        <!-- Right side: chip strip above the menu picture -->
+        <Grid Grid.Row="2" Grid.Column="2" Margin="0,8,0,0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="32"/>   <!-- Chip strip: fixed so the picture never moves -->
+                <RowDefinition Height="6"/>
+                <RowDefinition Height="*"/>    <!-- Picture -->
+            </Grid.RowDefinitions>
+
+            <!-- One chip per source screen, in the order the screens were found -->
+            <ScrollViewer Grid.Row="0"
+                          HorizontalScrollBarVisibility="Auto"
+                          VerticalScrollBarVisibility="Disabled">
+                <ItemsControl x:Name="ChipStrip">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal"/>
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
+            </ScrollViewer>
+
+            <Border Grid.Row="2"
+                    Background="{DynamicResource PanelBg}"
+                    BorderBrush="{DynamicResource BorderColor}"
+                    BorderThickness="1"
+                    CornerRadius="4">
+                <Grid>
+                    <TextBlock x:Name="PicturePlaceholder"
+                               Text="Select a disc title to see the menu screen it was named from."
+                               Foreground="{DynamicResource SubtleForeground}"
+                               FontSize="13"
+                               TextWrapping="Wrap"
+                               TextAlignment="Center"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               Margin="24"/>
+
+                    <!-- The picture and the hotspot layer share one 720 x 480 container,
+                         so button rectangles stay in source coordinates. The Viewbox
+                         scales the pair together: StretchDirection="DownOnly" shrinks
+                         it when space is short and never enlarges it. -->
+                    <Viewbox Stretch="Uniform" StretchDirection="DownOnly">
+                        <Grid Width="720" Height="480">
+                            <Image x:Name="MenuImage"
+                                   Stretch="Fill"
+                                   RenderOptions.BitmapScalingMode="HighQuality"/>
+                            <Canvas x:Name="HotspotLayer"/>
+                        </Grid>
+                    </Viewbox>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- Status line -->
+        <TextBlock Grid.Row="3" Grid.ColumnSpan="3"
+                   x:Name="StatusText"
+                   Foreground="{DynamicResource SubtleForeground}"
+                   FontSize="12"
+                   Margin="0,6,0,0"
+                   TextTrimming="CharacterEllipsis"/>
+    </Grid>
+</UserControl>

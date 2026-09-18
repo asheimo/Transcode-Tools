@@ -181,12 +181,16 @@ public sealed class AppSettings
     // Both lists share a single max size setting.
     public List<string> RecentInputFolders  { get; set; } = new();
     public List<string> RecentOutputFolders { get; set; } = new();
+    // Rip mode's Destination folder history. Shares the same max size.
+    public List<string> RecentDestinationFolders { get; set; } = new();
     public int RecentFolderHistorySize      { get; set; } = 6;
 
-    // Prepends a path to the recent input/output list, deduplicates, and
-    // trims to RecentFolderHistorySize. Call after a successful selection.
-    public void AddRecentInput(string folder)  => AddRecent(RecentInputFolders,  folder);
-    public void AddRecentOutput(string folder) => AddRecent(RecentOutputFolders, folder);
+    // Prepends a path to the recent input/output/destination list,
+    // deduplicates, and trims to RecentFolderHistorySize. Call after a
+    // successful selection.
+    public void AddRecentInput(string folder)       => AddRecent(RecentInputFolders,       folder);
+    public void AddRecentOutput(string folder)      => AddRecent(RecentOutputFolders,      folder);
+    public void AddRecentDestination(string folder) => AddRecent(RecentDestinationFolders, folder);
 
     private void AddRecent(List<string> list, string folder)
     {

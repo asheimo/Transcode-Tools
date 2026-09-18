@@ -56,7 +56,16 @@ public partial class MainWindow : Window
     // Which list is being dragged (so MouseMove knows which list to act on)
     private ListView? _dragSourceList;
 
-    private bool _isTranscodeMode = false;
+    // ── User mode ────────────────────────────────────────────────────
+    // One enum value is the single source of truth for which mode is showing.
+    // _isTranscodeMode used to be a bool field of its own; it is now a
+    // read-only view over _mode, so the existing call sites that ask
+    // "is this Transcode?" keep working unchanged. It keeps its field-style
+    // name for that reason. "!_isTranscodeMode" in those call sites means
+    // Remux: their code only runs from the Remux/Transcode layout, which is
+    // hidden in Rip mode.
+    private UserMode _mode = UserMode.Remux;
+    private bool _isTranscodeMode => _mode == UserMode.Transcode;
 
     // Known extras category suffixes — split on the LAST dash in the filename,
     // then check if what follows is one of these known types.
@@ -82,6 +91,22 @@ public partial class MainWindow : Window
         TranscodeVideoList.ItemsSource    = TranscodeVideoTracks;
         TranscodeAudioList.ItemsSource    = TranscodeAudioTracks;
         TranscodeSubtitleList.ItemsSource = TranscodeSubtitleTracks;
+
+        SelectStartupMode();
+    }
+
+    // Checks the leftmost mode button that is showing. Done here rather than
+    // with IsChecked in the XAML: a Checked event raised from XAML fires while
+    // the window is still being built, before the controls ModeChanged touches
+    // exist. Once the Rip/Remux/Transcode preferences exist, an unchosen mode's
+    // button is collapsed and this picks the leftmost one left.
+    private void SelectStartupMode()
+    {
+        var first = ModeBar.Children
+            .OfType<RadioButton>()
+            .FirstOrDefault(rb => rb.Visibility == Visibility.Visible);
+        if (first != null)
+            first.IsChecked = true;
     }
 
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)
@@ -91,10 +116,17 @@ public partial class MainWindow : Window
     }
 
     // ── Mode switch ──────────────────────────────────────────────────
+    // All three mode buttons share this handler. WPF only raises Checked on
+    // the button that became checked, so "sender" is the new mode.
     private void ModeChanged(object sender, RoutedEventArgs e)
     {
-        if (TranscodeRadio is null) return;
-        _isTranscodeMode = TranscodeRadio.IsChecked == true;
+        if (sender is not RadioButton { IsChecked: true } radio) return;
+
+        _mode = radio == RipRadio       ? UserMode.Rip
+              : radio == TranscodeRadio ? UserMode.Transcode
+              :                           UserMode.Remux;
+
+        ApplyModeLayout();
 
         RemuxPanel.Visibility     = _isTranscodeMode ? Visibility.Collapsed : Visibility.Visible;
         TranscodePanel.Visibility = _isTranscodeMode ? Visibility.Visible   : Visibility.Collapsed;
@@ -130,7 +162,34 @@ public partial class MainWindow : Window
         HideSelectedFileBar();
     }
 
+    // Swaps between the Rip view and the shared Remux/Transcode layout, and
+    // shows only the File menu items that belong to the current mode.
+    // Rip has no Run window, so Run and its separator are hidden there.
+    private void ApplyModeLayout()
+    {
+        bool rip = _mode == UserMode.Rip;
+        var ripOnly  = rip ? Visibility.Visible   : Visibility.Collapsed;
+        var fileOnly = rip ? Visibility.Collapsed : Visibility.Visible;
+
+        RipContent.Visibility      = ripOnly;
+        FileModeContent.Visibility = fileOnly;
+        BottomButtonBar.Visibility = fileOnly;
+
+        OpenDestinationMenuItem.Visibility         = ripOnly;
+        ClearDestinationHistoryMenuItem.Visibility = ripOnly;
+
+        OpenInputMenuItem.Visibility          = fileOnly;
+        OpenOutputMenuItem.Visibility         = fileOnly;
+        RunMenuItem.Visibility                = fileOnly;
+        RunSeparator.Visibility               = fileOnly;
+        ClearInputHistoryMenuItem.Visibility  = fileOnly;
+        ClearOutputHistoryMenuItem.Visibility = fileOnly;
+    }
+
     // ── Directory selection ──────────────────────────────────────────
+    private void OpenDestinationDirectory_Click(object sender, RoutedEventArgs e)
+        => RipContent.BrowseDestination();
+
     private void OpenInputDirectory_Click(object sender, RoutedEventArgs e)
     {
         var path = BrowseFolder("Select Input Directory");
@@ -2928,6 +2987,9 @@ public partial class MainWindow : Window
         AppSettings.Instance.Save();
         RefreshHistoryDropdowns();
     }
+
+    private void ClearDestinationHistory_Click(object sender, RoutedEventArgs e)
+        => RipContent.ClearDestinationHistory();
 
     private void ClearOutputHistory_Click(object sender, RoutedEventArgs e)
     {

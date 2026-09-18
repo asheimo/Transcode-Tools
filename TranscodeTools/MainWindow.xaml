@@ -122,14 +122,20 @@
               BorderBrush="{DynamicResource SeparatorColor}"
               BorderThickness="0,0,0,1">
             <MenuItem Header="File">
-                <MenuItem Header="Open Input Directory"  Click="OpenInputDirectory_Click"/>
-                <MenuItem Header="Open Output Directory" Click="OpenOutputDirectory_Click"/>
+                <!-- Rip mode shows only the Destination items; Remux/Transcode show
+                     only the Input/Output items and Run. ApplyModeLayout() sets visibility. -->
+                <MenuItem x:Name="OpenDestinationMenuItem" Header="Open Destination Directory"
+                          Visibility="Collapsed" Click="OpenDestinationDirectory_Click"/>
+                <MenuItem x:Name="OpenInputMenuItem"  Header="Open Input Directory"  Click="OpenInputDirectory_Click"/>
+                <MenuItem x:Name="OpenOutputMenuItem" Header="Open Output Directory" Click="OpenOutputDirectory_Click"/>
                 <Separator Style="{StaticResource {x:Static MenuItem.SeparatorStyleKey}}"/>
                 <MenuItem x:Name="RunMenuItem" Header="Run Remux" Click="Run_Click"/>
-                <Separator Style="{StaticResource {x:Static MenuItem.SeparatorStyleKey}}"/>
+                <Separator x:Name="RunSeparator" Style="{StaticResource {x:Static MenuItem.SeparatorStyleKey}}"/>
                 <MenuItem Header="History">
-                    <MenuItem Header="Clear Input History"  Click="ClearInputHistory_Click"/>
-                    <MenuItem Header="Clear Output History" Click="ClearOutputHistory_Click"/>
+                    <MenuItem x:Name="ClearDestinationHistoryMenuItem" Header="Clear Destination History"
+                              Visibility="Collapsed" Click="ClearDestinationHistory_Click"/>
+                    <MenuItem x:Name="ClearInputHistoryMenuItem"  Header="Clear Input History"  Click="ClearInputHistory_Click"/>
+                    <MenuItem x:Name="ClearOutputHistoryMenuItem" Header="Clear Output History" Click="ClearOutputHistory_Click"/>
                 </MenuItem>
                 <MenuItem Header="Preferences"           Click="Preferences_Click"/>
                 <Separator Style="{StaticResource {x:Static MenuItem.SeparatorStyleKey}}"/>
@@ -146,16 +152,21 @@
                 BorderBrush="{DynamicResource SeparatorColor}"
                 BorderThickness="0,0,0,1"
                 Padding="12,0">
-            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+            <StackPanel x:Name="ModeBar" Orientation="Horizontal" VerticalAlignment="Center">
                 <TextBlock Text="User Mode:"
                            Foreground="{DynamicResource SubtleForeground}"
                            FontSize="13"
                            VerticalAlignment="Center"
                            Margin="0,0,12,0"/>
+                <!-- No IsChecked here: the constructor checks the leftmost visible
+                     button once every element exists (see SelectStartupMode). -->
+                <RadioButton x:Name="RipRadio"
+                             Content="Rip"
+                             Style="{StaticResource ModeRadio}"
+                             Checked="ModeChanged"/>
                 <RadioButton x:Name="RemuxRadio"
                              Content="Remux"
                              Style="{StaticResource ModeRadio}"
-                             IsChecked="True"
                              Checked="ModeChanged"/>
                 <RadioButton x:Name="TranscodeRadio"
                              Content="Transcode"
@@ -164,8 +175,9 @@
             </StackPanel>
         </Border>
 
-        <!-- Bottom button bar -->
-        <Border DockPanel.Dock="Bottom"
+        <!-- Bottom button bar (Remux/Transcode only; collapsed in Rip mode) -->
+        <Border x:Name="BottomButtonBar"
+                DockPanel.Dock="Bottom"
                 Background="{DynamicResource SurfaceBg}"
                 BorderBrush="{DynamicResource SeparatorColor}"
                 BorderThickness="0,1,0,0"
@@ -216,611 +228,620 @@
             </Grid>
         </Border>
 
-        <!-- Main content area — three shared columns so directory pickers
-             and browser panels align perfectly:
-             Col 0 = left panel (*), Col 1 = splitter (8px), Col 2 = right panel (*) -->
-        <Grid Margin="12,10,12,10">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" MinWidth="150"/>
-                <ColumnDefinition Width="8"/>
-                <ColumnDefinition Width="*" MinWidth="150"/>
-            </Grid.ColumnDefinitions>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="32"/>       <!-- Directory pickers -->
-                <RowDefinition Height="200"/>      <!-- File browser panels -->
-                <RowDefinition Height="Auto"/>     <!-- Selected file bar -->
-                <RowDefinition Height="*"/>        <!-- Track tables -->
-            </Grid.RowDefinitions>
-
-            <!-- Input directory picker — aligned to left panel column -->
-            <Grid Grid.Row="0" Grid.Column="0">
+        <!-- Content host: FileModeContent is the shared Remux/Transcode layout,
+             RipContent is Rip mode. Exactly one is visible (see ApplyModeLayout). -->
+        <Grid>
+            <!-- Main content area — three shared columns so directory pickers
+                 and browser panels align perfectly:
+                 Col 0 = left panel (*), Col 1 = splitter (8px), Col 2 = right panel (*) -->
+            <Grid x:Name="FileModeContent" Margin="12,10,12,10">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*" MinWidth="150"/>
+                    <ColumnDefinition Width="8"/>
+                    <ColumnDefinition Width="*" MinWidth="150"/>
                 </Grid.ColumnDefinitions>
-                <Button Grid.Column="0"
-                        Content="Input Directory"
-                        Style="{StaticResource FlatButton}"
-                        Width="130"
-                        Margin="0,0,6,0"
-                        Click="OpenInputDirectory_Click"/>
-                <ComboBox Grid.Column="1"
-                          x:Name="InputDirectoryBox"
-                          IsEditable="True"
-                          IsReadOnly="True"
-                          SelectionChanged="InputDirectoryBox_SelectionChanged"/>
-            </Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="32"/>       <!-- Directory pickers -->
+                    <RowDefinition Height="200"/>      <!-- File browser panels -->
+                    <RowDefinition Height="Auto"/>     <!-- Selected file bar -->
+                    <RowDefinition Height="*"/>        <!-- Track tables -->
+                </Grid.RowDefinitions>
 
-            <!-- Output directory picker — aligned to right panel column -->
-            <Grid Grid.Row="0" Grid.Column="2">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-                <Button Grid.Column="0"
-                        Content="Output Directory"
-                        Style="{StaticResource FlatButton}"
-                        Width="130"
-                        Margin="0,0,6,0"
-                        Click="OpenOutputDirectory_Click"/>
-                <ComboBox Grid.Column="1"
-                          x:Name="OutputDirectoryBox"
-                          IsEditable="True"
-                          IsReadOnly="True"
-                          SelectionChanged="OutputDirectoryBox_SelectionChanged"/>
-            </Grid>
-
-            <!-- Adjustable splitter — spans both directory picker and browser rows -->
-            <GridSplitter Grid.Column="1" Grid.Row="0" Grid.RowSpan="2"
-                          HorizontalAlignment="Stretch"
-                          VerticalAlignment="Stretch"
-                          ResizeDirection="Columns"
-                          ResizeBehavior="PreviousAndNext"
-                          Background="Transparent">
-                <GridSplitter.Template>
-                    <ControlTemplate TargetType="GridSplitter">
-                        <Grid Background="Transparent">
-                            <StackPanel Orientation="Vertical"
-                                        HorizontalAlignment="Center"
-                                        VerticalAlignment="Center">
-                                <Ellipse Width="4" Height="4" Fill="{DynamicResource SubtleForeground}" Margin="0,2,0,2"/>
-                                <Ellipse Width="4" Height="4" Fill="{DynamicResource SubtleForeground}" Margin="0,2,0,2"/>
-                                <Ellipse Width="4" Height="4" Fill="{DynamicResource SubtleForeground}" Margin="0,2,0,2"/>
-                            </StackPanel>
-                        </Grid>
-                    </ControlTemplate>
-                </GridSplitter.Template>
-            </GridSplitter>
-
-                <!-- Left: folder/show browser -->
-                <Border Grid.Row="1" Grid.Column="0" Margin="0,8,0,0"
-                        Background="{DynamicResource PanelBg}"
-                        BorderBrush="{DynamicResource BorderColor}"
-                        BorderThickness="1"
-                        CornerRadius="4">
-                    <TreeView x:Name="FolderList"
-                              Background="Transparent"
-                              BorderThickness="0"
-                              Foreground="{DynamicResource ForegroundColor}"
-                              FontSize="13"
-                              ScrollViewer.VerticalScrollBarVisibility="Auto"
-                              SelectedItemChanged="FolderList_SelectedItemChanged">
-                        <TreeView.Resources>
-                            <!-- Movie folder: leaf node, no children.
-                                 Warning indicator shown when folder name has no (YYYY) year. -->
-                            <DataTemplate DataType="{x:Type local:FolderNode}">
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="⚠ "
-                                               Foreground="#FFCC00"
-                                               FontSize="11"
-                                               VerticalAlignment="Center"
-                                               ToolTip="Missing Year Label"
-                                               Visibility="{Binding HasYearWarning,
-                                                   Converter={StaticResource BoolToVisibility}}"/>
-                                    <TextBlock Text="{Binding DisplayName}" Padding="2,1">
-                                        <TextBlock.ContextMenu>
-                                            <ContextMenu>
-                                                <MenuItem Header="Rename"
-                                                          Click="RenameFolderNode_Click"/>
-                                            </ContextMenu>
-                                        </TextBlock.ContextMenu>
-                                    </TextBlock>
-                                </StackPanel>
-                            </DataTemplate>
-                            <!-- TV show: expandable node with season children -->
-                            <HierarchicalDataTemplate DataType="{x:Type local:ShowNode}"
-                                                      ItemsSource="{Binding Children}">
-                                <TextBlock Text="{Binding DisplayName}" Padding="2,1"/>
-                            </HierarchicalDataTemplate>
-                            <!-- Season: leaf node inside a show -->
-                            <DataTemplate DataType="{x:Type local:SeasonNode}">
-                                <TextBlock Text="{Binding DisplayName}" Padding="2,1"/>
-                            </DataTemplate>
-                        </TreeView.Resources>
-                    </TreeView>
-                </Border>
-
-                <!-- Right: TreeView of files within the selected folder -->
-                <Border Grid.Row="1" Grid.Column="2" Margin="0,8,0,0"
-                        Background="{DynamicResource PanelBg}"
-                        BorderBrush="{DynamicResource BorderColor}"
-                        BorderThickness="1"
-                        CornerRadius="4">
-                    <TreeView x:Name="FileTree"
-                              Background="Transparent"
-                              BorderThickness="0"
-                              Foreground="{DynamicResource ForegroundColor}"
-                              ScrollViewer.VerticalScrollBarVisibility="Auto"
-                              SelectedItemChanged="FileTree_SelectedItemChanged">
-                        <TreeView.Resources>
-                            <!-- Group node template: shows category name with expand arrow -->
-                            <HierarchicalDataTemplate DataType="{x:Type local:FileGroupNode}"
-                                                      ItemsSource="{Binding Children}">
-                                <TextBlock Text="{Binding DisplayName}"
-                                           Background="{Binding Background}"
-                                           Padding="2,1"/>
-                            </HierarchicalDataTemplate>
-
-                            <!-- Leaf node template: shows individual file name.
-                                 Warning indicator shown when filename has no (YYYY) year. -->
-                            <DataTemplate DataType="{x:Type local:FileLeafNode}">
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="⚠ "
-                                               Foreground="#FFCC00"
-                                               FontSize="11"
-                                               VerticalAlignment="Center"
-                                               ToolTip="Missing Year Label"
-                                               Visibility="{Binding HasYearWarning,
-                                                   Converter={StaticResource BoolToVisibility}}"/>
-                                    <TextBlock Text="⚠ "
-                                               Foreground="#FF8C00"
-                                               FontSize="11"
-                                               VerticalAlignment="Center"
-                                               ToolTip="{Binding ResolutionMismatchTooltip}"
-                                               Visibility="{Binding HasResolutionMismatch,
-                                                   Converter={StaticResource BoolToVisibility}}"/>
-                                    <TextBlock Text="{Binding DisplayName}"
-                                               Background="{Binding Background}"
-                                               Padding="2,1">
-                                        <TextBlock.ContextMenu>
-                                            <ContextMenu>
-                                                <MenuItem Header="Rename"
-                                                          Click="RenameLeaf_Click"/>
-                                                <MenuItem Header="Fix Resolution Label"
-                                                          Click="FixResolutionLabel_Click"
-                                                          Visibility="{Binding HasResolutionMismatch,
-                                                              Converter={StaticResource BoolToVisibility}}"/>
-                                                <MenuItem Header="Delete Settings File"
-                                                          Click="DeleteSettingsFile_Click"/>
-                                                <MenuItem Header="Open Settings Folder"
-                                                          Click="OpenSettingsFolder_Click"/>
-                                            </ContextMenu>
-                                        </TextBlock.ContextMenu>
-                                    </TextBlock>
-                                </StackPanel>
-                            </DataTemplate>
-                        </TreeView.Resources>
-                    </TreeView>
-                </Border>
-
-            <!-- Selected file bar — shows which file's tracks are displayed below -->
-            <!-- Hidden until a file is selected -->
-            <Border Grid.Row="2" Grid.ColumnSpan="3"
-                    x:Name="SelectedFileBar"
-                    Background="{DynamicResource SurfaceBg}"
-                    BorderBrush="{DynamicResource BorderColor}"
-                    BorderThickness="1"
-                    CornerRadius="4"
-                    Margin="0,8,0,0"
-                    Padding="10,6"
-                    Visibility="Collapsed">
-                <TextBlock x:Name="SelectedFileLabel"
-                           Foreground="{DynamicResource ForegroundColor}"
-                           FontSize="13"
-                           FontWeight="SemiBold"/>
-            </Border>
-
-            <!-- Track panels -->
-            <Grid Grid.Row="3" Grid.ColumnSpan="3" Margin="0,8,0,0">
-
-                <!-- REMUX MODE -->
-                <Grid x:Name="RemuxPanel">
-                    <Grid.RowDefinitions>
-                        <!-- Video: auto-sizes to content, almost always one row -->
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto" MinHeight="52" MaxHeight="104"/>
-                        <RowDefinition Height="8"/>
-                        <!-- Audio: MinHeight increased to show ~3 rows without scrolling —
-                             avoids scroll-on-click confusion when the last row is selected. -->
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*" MinHeight="110"/>
-                        <RowDefinition Height="8"/>
-                        <!-- Subtitles: takes a proportional share of remaining space -->
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*" MinHeight="52"/>
-                    </Grid.RowDefinitions>
-
-                    <TextBlock Grid.Row="0" Text="VIDEO" Style="{StaticResource SectionLabel}"/>
-
-                    <!-- Video — display only, no selection checkbox, no drag -->
-                    <ListView Grid.Row="1"
-                              x:Name="RemuxVideoList"
-                              BorderThickness="1"
-                              BorderBrush="{DynamicResource BorderColor}"
-                              IsHitTestVisible="False"
-                              ScrollViewer.VerticalScrollBarVisibility="Auto">
-                        <!-- IsHitTestVisible=False makes the whole list non-interactive -->
-                        <!-- The user cannot select rows or click checkboxes -->
-                        <ListView.View>
-                            <GridView>
-                                <GridViewColumn Header="Video Format" Width="180" DisplayMemberBinding="{Binding VideoFormat}"/>
-                                <GridViewColumn Header="Resolution"   Width="120" DisplayMemberBinding="{Binding Resolution}"/>
-                                <GridViewColumn Header="fps"          Width="120" DisplayMemberBinding="{Binding Fps}"/>
-                            </GridView>
-                        </ListView.View>
-                    </ListView>
-
-                    <TextBlock Grid.Row="3" Text="AUDIO" Style="{StaticResource SectionLabel}"/>
-
-                    <!-- Audio — selectable rows, drag to reorder -->
-                    <ListView Grid.Row="4"
-                              x:Name="RemuxAudioList"
-                              BorderThickness="1"
-                              BorderBrush="{DynamicResource BorderColor}"
-                              SelectionMode="Single"
-                              AllowDrop="True"
-                              ToolTip="Select 2 or more tracks to enable reordering"
-                              ScrollViewer.VerticalScrollBarVisibility="Auto"
-                              PreviewMouseLeftButtonDown="AudioList_PreviewMouseLeftButtonDown"
-                              PreviewMouseMove="AudioList_PreviewMouseMove"
-                              MouseLeftButtonUp="AudioList_MouseLeftButtonUp"
-                              Drop="AudioList_Drop">
-                        <ListView.View>
-                            <GridView>
-                                <GridViewColumn Width="30">
-                                    <GridViewColumn.CellTemplate>
-                                        <DataTemplate>
-                                            <CheckBox IsChecked="{Binding IsSelected}" ToolTip="Include in output"/>
-                                        </DataTemplate>
-                                    </GridViewColumn.CellTemplate>
-                                </GridViewColumn>
-                                <GridViewColumn Header="Audio Format"    Width="150" DisplayMemberBinding="{Binding AudioFormat}"/>
-                                <GridViewColumn Header="Width"           Width="90"  DisplayMemberBinding="{Binding Width}"/>
-                                <GridViewColumn Header="Bit Rate (Kbps)" Width="110" DisplayMemberBinding="{Binding BitRate}"/>
-                                <GridViewColumn Header="Language"        Width="90"  DisplayMemberBinding="{Binding Language}"/>
-                                <GridViewColumn Header="Title"           Width="160" DisplayMemberBinding="{Binding Title}"/>
-                                <GridViewColumn Header="Default"         Width="70">
-                                    <GridViewColumn.CellTemplate>
-                                        <DataTemplate>
-                                            <CheckBox IsChecked="{Binding IsDefault}" IsEnabled="False"/>
-                                        </DataTemplate>
-                                    </GridViewColumn.CellTemplate>
-                                </GridViewColumn>
-                            </GridView>
-                        </ListView.View>
-                    </ListView>
-
-                    <TextBlock Grid.Row="6" Text="SUBTITLES" Style="{StaticResource SectionLabel}"/>
-
-                    <!-- Subtitles — selectable rows, drag to reorder.
-                         Right-click → "Edit Title…" opens a dialog that
-                         updates the bound row's Title property. The
-                         column itself is display-only. -->
-                    <ListView Grid.Row="7"
-                              x:Name="RemuxSubtitleList"
-                              BorderThickness="1"
-                              BorderBrush="{DynamicResource BorderColor}"
-                              SelectionMode="Single"
-                              AllowDrop="True"
-                              ScrollViewer.VerticalScrollBarVisibility="Auto"
-                              PreviewMouseLeftButtonDown="SubtitleList_PreviewMouseLeftButtonDown"
-                              PreviewMouseMove="SubtitleList_PreviewMouseMove"
-                              MouseLeftButtonUp="SubtitleList_MouseLeftButtonUp"
-                              PreviewMouseRightButtonDown="RemuxSubtitleList_PreviewMouseRightButtonDown"
-                              Drop="SubtitleList_Drop">
-                        <ListView.ContextMenu>
-                            <ContextMenu>
-                                <MenuItem Header="Edit Title…"
-                                          Click="EditSubtitleTitle_Click"/>
-                            </ContextMenu>
-                        </ListView.ContextMenu>
-                        <ListView.View>
-                            <GridView>
-                                <GridViewColumn Width="30">
-                                    <GridViewColumn.CellTemplate>
-                                        <DataTemplate>
-                                            <CheckBox IsChecked="{Binding IsSelected}" ToolTip="Include in output"/>
-                                        </DataTemplate>
-                                    </GridViewColumn.CellTemplate>
-                                </GridViewColumn>
-                                <GridViewColumn Header="Subtitle Format" Width="150" DisplayMemberBinding="{Binding SubtitleFormat}"/>
-                                <GridViewColumn Header="Language"        Width="90"  DisplayMemberBinding="{Binding Language}"/>
-                                <GridViewColumn Header="Title"           Width="160" DisplayMemberBinding="{Binding Title}"/>
-                                <GridViewColumn Header="# of Frames"     Width="100" DisplayMemberBinding="{Binding FrameCount}"/>
-                                <GridViewColumn Header="Default"         Width="70">
-                                    <GridViewColumn.CellTemplate>
-                                        <DataTemplate>
-                                            <CheckBox IsChecked="{Binding IsDefault}" IsEnabled="False"/>
-                                        </DataTemplate>
-                                    </GridViewColumn.CellTemplate>
-                                </GridViewColumn>
-                                <GridViewColumn Header="Forced" Width="60">
-                                    <GridViewColumn.CellTemplate>
-                                        <DataTemplate>
-                                            <CheckBox IsChecked="{Binding IsForced}" IsEnabled="False"/>
-                                        </DataTemplate>
-                                    </GridViewColumn.CellTemplate>
-                                </GridViewColumn>
-                            </GridView>
-                        </ListView.View>
-                    </ListView>
+                <!-- Input directory picker — aligned to left panel column -->
+                <Grid Grid.Row="0" Grid.Column="0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0"
+                            Content="Input Directory"
+                            Style="{StaticResource FlatButton}"
+                            Width="130"
+                            Margin="0,0,6,0"
+                            Click="OpenInputDirectory_Click"/>
+                    <ComboBox Grid.Column="1"
+                              x:Name="InputDirectoryBox"
+                              IsEditable="True"
+                              IsReadOnly="True"
+                              SelectionChanged="InputDirectoryBox_SelectionChanged"/>
                 </Grid>
 
-                <!-- TRANSCODE MODE -->
-                <Grid x:Name="TranscodePanel" Visibility="Collapsed">
-                    <Grid.RowDefinitions>
-                        <!-- Video: auto-sizes to content, almost always one row -->
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto" MinHeight="52" MaxHeight="104"/>
-                        <RowDefinition Height="8"/>
-                        <!-- Audio: MinHeight increased to show ~3 rows without scrolling —
-                             avoids scroll-on-click confusion when the last row is selected. -->
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*" MinHeight="110"/>
-                        <RowDefinition Height="8"/>
-                        <!-- Subtitles: takes a proportional share of remaining space -->
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*" MinHeight="52"/>
-                    </Grid.RowDefinitions>
+                <!-- Output directory picker — aligned to right panel column -->
+                <Grid Grid.Row="0" Grid.Column="2">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0"
+                            Content="Output Directory"
+                            Style="{StaticResource FlatButton}"
+                            Width="130"
+                            Margin="0,0,6,0"
+                            Click="OpenOutputDirectory_Click"/>
+                    <ComboBox Grid.Column="1"
+                              x:Name="OutputDirectoryBox"
+                              IsEditable="True"
+                              IsReadOnly="True"
+                              SelectionChanged="OutputDirectoryBox_SelectionChanged"/>
+                </Grid>
 
-                    <TextBlock Grid.Row="0" Text="VIDEO" Style="{StaticResource SectionLabel}"/>
+                <!-- Adjustable splitter — spans both directory picker and browser rows -->
+                <GridSplitter Grid.Column="1" Grid.Row="0" Grid.RowSpan="2"
+                              HorizontalAlignment="Stretch"
+                              VerticalAlignment="Stretch"
+                              ResizeDirection="Columns"
+                              ResizeBehavior="PreviousAndNext"
+                              Background="Transparent">
+                    <GridSplitter.Template>
+                        <ControlTemplate TargetType="GridSplitter">
+                            <Grid Background="Transparent">
+                                <StackPanel Orientation="Vertical"
+                                            HorizontalAlignment="Center"
+                                            VerticalAlignment="Center">
+                                    <Ellipse Width="4" Height="4" Fill="{DynamicResource SubtleForeground}" Margin="0,2,0,2"/>
+                                    <Ellipse Width="4" Height="4" Fill="{DynamicResource SubtleForeground}" Margin="0,2,0,2"/>
+                                    <Ellipse Width="4" Height="4" Fill="{DynamicResource SubtleForeground}" Margin="0,2,0,2"/>
+                                </StackPanel>
+                            </Grid>
+                        </ControlTemplate>
+                    </GridSplitter.Template>
+                </GridSplitter>
 
-                    <ListView Grid.Row="1" x:Name="TranscodeVideoList"
-                              BorderThickness="1" BorderBrush="{DynamicResource BorderColor}"
-                              ScrollViewer.VerticalScrollBarVisibility="Auto">
-                        <ListView.View>
-                            <GridView>
-                                <!-- Track Info cell — background coloured per stream type:
-                                     DoVi       → #FFE08A amber
-                                     HDR10+     → #3498DB solid blue
-                                     Interlaced → #9B59B6 medium purple
-                                     White text on purple/blue, black on amber. -->
-                                <GridViewColumn Header="Track Info" Width="280">
-                                    <GridViewColumn.CellTemplate>
-                                        <DataTemplate>
-                                            <Border Padding="2,0">
-                                                <Border.Style>
-                                                    <Style TargetType="Border">
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding HasDoVi}" Value="True">
-                                                                <Setter Property="Background" Value="#FFE08A"/>
-                                                            </DataTrigger>
-                                                            <DataTrigger Binding="{Binding HasHdr10Plus}" Value="True">
-                                                                <Setter Property="Background" Value="#3498DB"/>
-                                                            </DataTrigger>
-                                                            <DataTrigger Binding="{Binding IsInterlaced}" Value="True">
-                                                                <Setter Property="Background" Value="#9B59B6"/>
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </Border.Style>
-                                                <TextBlock Text="{Binding TrackInfo}"
-                                                           ToolTip="{Binding TrackInfo}">
-                                                    <TextBlock.Style>
-                                                        <Style TargetType="TextBlock">
-                                                            <Setter Property="Foreground" Value="{DynamicResource ForegroundColor}"/>
+                    <!-- Left: folder/show browser -->
+                    <Border Grid.Row="1" Grid.Column="0" Margin="0,8,0,0"
+                            Background="{DynamicResource PanelBg}"
+                            BorderBrush="{DynamicResource BorderColor}"
+                            BorderThickness="1"
+                            CornerRadius="4">
+                        <TreeView x:Name="FolderList"
+                                  Background="Transparent"
+                                  BorderThickness="0"
+                                  Foreground="{DynamicResource ForegroundColor}"
+                                  FontSize="13"
+                                  ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                  SelectedItemChanged="FolderList_SelectedItemChanged">
+                            <TreeView.Resources>
+                                <!-- Movie folder: leaf node, no children.
+                                     Warning indicator shown when folder name has no (YYYY) year. -->
+                                <DataTemplate DataType="{x:Type local:FolderNode}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="⚠ "
+                                                   Foreground="#FFCC00"
+                                                   FontSize="11"
+                                                   VerticalAlignment="Center"
+                                                   ToolTip="Missing Year Label"
+                                                   Visibility="{Binding HasYearWarning,
+                                                       Converter={StaticResource BoolToVisibility}}"/>
+                                        <TextBlock Text="{Binding DisplayName}" Padding="2,1">
+                                            <TextBlock.ContextMenu>
+                                                <ContextMenu>
+                                                    <MenuItem Header="Rename"
+                                                              Click="RenameFolderNode_Click"/>
+                                                </ContextMenu>
+                                            </TextBlock.ContextMenu>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </DataTemplate>
+                                <!-- TV show: expandable node with season children -->
+                                <HierarchicalDataTemplate DataType="{x:Type local:ShowNode}"
+                                                          ItemsSource="{Binding Children}">
+                                    <TextBlock Text="{Binding DisplayName}" Padding="2,1"/>
+                                </HierarchicalDataTemplate>
+                                <!-- Season: leaf node inside a show -->
+                                <DataTemplate DataType="{x:Type local:SeasonNode}">
+                                    <TextBlock Text="{Binding DisplayName}" Padding="2,1"/>
+                                </DataTemplate>
+                            </TreeView.Resources>
+                        </TreeView>
+                    </Border>
+
+                    <!-- Right: TreeView of files within the selected folder -->
+                    <Border Grid.Row="1" Grid.Column="2" Margin="0,8,0,0"
+                            Background="{DynamicResource PanelBg}"
+                            BorderBrush="{DynamicResource BorderColor}"
+                            BorderThickness="1"
+                            CornerRadius="4">
+                        <TreeView x:Name="FileTree"
+                                  Background="Transparent"
+                                  BorderThickness="0"
+                                  Foreground="{DynamicResource ForegroundColor}"
+                                  ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                  SelectedItemChanged="FileTree_SelectedItemChanged">
+                            <TreeView.Resources>
+                                <!-- Group node template: shows category name with expand arrow -->
+                                <HierarchicalDataTemplate DataType="{x:Type local:FileGroupNode}"
+                                                          ItemsSource="{Binding Children}">
+                                    <TextBlock Text="{Binding DisplayName}"
+                                               Background="{Binding Background}"
+                                               Padding="2,1"/>
+                                </HierarchicalDataTemplate>
+
+                                <!-- Leaf node template: shows individual file name.
+                                     Warning indicator shown when filename has no (YYYY) year. -->
+                                <DataTemplate DataType="{x:Type local:FileLeafNode}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="⚠ "
+                                                   Foreground="#FFCC00"
+                                                   FontSize="11"
+                                                   VerticalAlignment="Center"
+                                                   ToolTip="Missing Year Label"
+                                                   Visibility="{Binding HasYearWarning,
+                                                       Converter={StaticResource BoolToVisibility}}"/>
+                                        <TextBlock Text="⚠ "
+                                                   Foreground="#FF8C00"
+                                                   FontSize="11"
+                                                   VerticalAlignment="Center"
+                                                   ToolTip="{Binding ResolutionMismatchTooltip}"
+                                                   Visibility="{Binding HasResolutionMismatch,
+                                                       Converter={StaticResource BoolToVisibility}}"/>
+                                        <TextBlock Text="{Binding DisplayName}"
+                                                   Background="{Binding Background}"
+                                                   Padding="2,1">
+                                            <TextBlock.ContextMenu>
+                                                <ContextMenu>
+                                                    <MenuItem Header="Rename"
+                                                              Click="RenameLeaf_Click"/>
+                                                    <MenuItem Header="Fix Resolution Label"
+                                                              Click="FixResolutionLabel_Click"
+                                                              Visibility="{Binding HasResolutionMismatch,
+                                                                  Converter={StaticResource BoolToVisibility}}"/>
+                                                    <MenuItem Header="Delete Settings File"
+                                                              Click="DeleteSettingsFile_Click"/>
+                                                    <MenuItem Header="Open Settings Folder"
+                                                              Click="OpenSettingsFolder_Click"/>
+                                                </ContextMenu>
+                                            </TextBlock.ContextMenu>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </TreeView.Resources>
+                        </TreeView>
+                    </Border>
+
+                <!-- Selected file bar — shows which file's tracks are displayed below -->
+                <!-- Hidden until a file is selected -->
+                <Border Grid.Row="2" Grid.ColumnSpan="3"
+                        x:Name="SelectedFileBar"
+                        Background="{DynamicResource SurfaceBg}"
+                        BorderBrush="{DynamicResource BorderColor}"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Margin="0,8,0,0"
+                        Padding="10,6"
+                        Visibility="Collapsed">
+                    <TextBlock x:Name="SelectedFileLabel"
+                               Foreground="{DynamicResource ForegroundColor}"
+                               FontSize="13"
+                               FontWeight="SemiBold"/>
+                </Border>
+
+                <!-- Track panels -->
+                <Grid Grid.Row="3" Grid.ColumnSpan="3" Margin="0,8,0,0">
+
+                    <!-- REMUX MODE -->
+                    <Grid x:Name="RemuxPanel">
+                        <Grid.RowDefinitions>
+                            <!-- Video: auto-sizes to content, almost always one row -->
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto" MinHeight="52" MaxHeight="104"/>
+                            <RowDefinition Height="8"/>
+                            <!-- Audio: MinHeight increased to show ~3 rows without scrolling —
+                                 avoids scroll-on-click confusion when the last row is selected. -->
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*" MinHeight="110"/>
+                            <RowDefinition Height="8"/>
+                            <!-- Subtitles: takes a proportional share of remaining space -->
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*" MinHeight="52"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Text="VIDEO" Style="{StaticResource SectionLabel}"/>
+
+                        <!-- Video — display only, no selection checkbox, no drag -->
+                        <ListView Grid.Row="1"
+                                  x:Name="RemuxVideoList"
+                                  BorderThickness="1"
+                                  BorderBrush="{DynamicResource BorderColor}"
+                                  IsHitTestVisible="False"
+                                  ScrollViewer.VerticalScrollBarVisibility="Auto">
+                            <!-- IsHitTestVisible=False makes the whole list non-interactive -->
+                            <!-- The user cannot select rows or click checkboxes -->
+                            <ListView.View>
+                                <GridView>
+                                    <GridViewColumn Header="Video Format" Width="180" DisplayMemberBinding="{Binding VideoFormat}"/>
+                                    <GridViewColumn Header="Resolution"   Width="120" DisplayMemberBinding="{Binding Resolution}"/>
+                                    <GridViewColumn Header="fps"          Width="120" DisplayMemberBinding="{Binding Fps}"/>
+                                </GridView>
+                            </ListView.View>
+                        </ListView>
+
+                        <TextBlock Grid.Row="3" Text="AUDIO" Style="{StaticResource SectionLabel}"/>
+
+                        <!-- Audio — selectable rows, drag to reorder -->
+                        <ListView Grid.Row="4"
+                                  x:Name="RemuxAudioList"
+                                  BorderThickness="1"
+                                  BorderBrush="{DynamicResource BorderColor}"
+                                  SelectionMode="Single"
+                                  AllowDrop="True"
+                                  ToolTip="Select 2 or more tracks to enable reordering"
+                                  ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                  PreviewMouseLeftButtonDown="AudioList_PreviewMouseLeftButtonDown"
+                                  PreviewMouseMove="AudioList_PreviewMouseMove"
+                                  MouseLeftButtonUp="AudioList_MouseLeftButtonUp"
+                                  Drop="AudioList_Drop">
+                            <ListView.View>
+                                <GridView>
+                                    <GridViewColumn Width="30">
+                                        <GridViewColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <CheckBox IsChecked="{Binding IsSelected}" ToolTip="Include in output"/>
+                                            </DataTemplate>
+                                        </GridViewColumn.CellTemplate>
+                                    </GridViewColumn>
+                                    <GridViewColumn Header="Audio Format"    Width="150" DisplayMemberBinding="{Binding AudioFormat}"/>
+                                    <GridViewColumn Header="Width"           Width="90"  DisplayMemberBinding="{Binding Width}"/>
+                                    <GridViewColumn Header="Bit Rate (Kbps)" Width="110" DisplayMemberBinding="{Binding BitRate}"/>
+                                    <GridViewColumn Header="Language"        Width="90"  DisplayMemberBinding="{Binding Language}"/>
+                                    <GridViewColumn Header="Title"           Width="160" DisplayMemberBinding="{Binding Title}"/>
+                                    <GridViewColumn Header="Default"         Width="70">
+                                        <GridViewColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <CheckBox IsChecked="{Binding IsDefault}" IsEnabled="False"/>
+                                            </DataTemplate>
+                                        </GridViewColumn.CellTemplate>
+                                    </GridViewColumn>
+                                </GridView>
+                            </ListView.View>
+                        </ListView>
+
+                        <TextBlock Grid.Row="6" Text="SUBTITLES" Style="{StaticResource SectionLabel}"/>
+
+                        <!-- Subtitles — selectable rows, drag to reorder.
+                             Right-click → "Edit Title…" opens a dialog that
+                             updates the bound row's Title property. The
+                             column itself is display-only. -->
+                        <ListView Grid.Row="7"
+                                  x:Name="RemuxSubtitleList"
+                                  BorderThickness="1"
+                                  BorderBrush="{DynamicResource BorderColor}"
+                                  SelectionMode="Single"
+                                  AllowDrop="True"
+                                  ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                  PreviewMouseLeftButtonDown="SubtitleList_PreviewMouseLeftButtonDown"
+                                  PreviewMouseMove="SubtitleList_PreviewMouseMove"
+                                  MouseLeftButtonUp="SubtitleList_MouseLeftButtonUp"
+                                  PreviewMouseRightButtonDown="RemuxSubtitleList_PreviewMouseRightButtonDown"
+                                  Drop="SubtitleList_Drop">
+                            <ListView.ContextMenu>
+                                <ContextMenu>
+                                    <MenuItem Header="Edit Title…"
+                                              Click="EditSubtitleTitle_Click"/>
+                                </ContextMenu>
+                            </ListView.ContextMenu>
+                            <ListView.View>
+                                <GridView>
+                                    <GridViewColumn Width="30">
+                                        <GridViewColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <CheckBox IsChecked="{Binding IsSelected}" ToolTip="Include in output"/>
+                                            </DataTemplate>
+                                        </GridViewColumn.CellTemplate>
+                                    </GridViewColumn>
+                                    <GridViewColumn Header="Subtitle Format" Width="150" DisplayMemberBinding="{Binding SubtitleFormat}"/>
+                                    <GridViewColumn Header="Language"        Width="90"  DisplayMemberBinding="{Binding Language}"/>
+                                    <GridViewColumn Header="Title"           Width="160" DisplayMemberBinding="{Binding Title}"/>
+                                    <GridViewColumn Header="# of Frames"     Width="100" DisplayMemberBinding="{Binding FrameCount}"/>
+                                    <GridViewColumn Header="Default"         Width="70">
+                                        <GridViewColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <CheckBox IsChecked="{Binding IsDefault}" IsEnabled="False"/>
+                                            </DataTemplate>
+                                        </GridViewColumn.CellTemplate>
+                                    </GridViewColumn>
+                                    <GridViewColumn Header="Forced" Width="60">
+                                        <GridViewColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <CheckBox IsChecked="{Binding IsForced}" IsEnabled="False"/>
+                                            </DataTemplate>
+                                        </GridViewColumn.CellTemplate>
+                                    </GridViewColumn>
+                                </GridView>
+                            </ListView.View>
+                        </ListView>
+                    </Grid>
+
+                    <!-- TRANSCODE MODE -->
+                    <Grid x:Name="TranscodePanel" Visibility="Collapsed">
+                        <Grid.RowDefinitions>
+                            <!-- Video: auto-sizes to content, almost always one row -->
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto" MinHeight="52" MaxHeight="104"/>
+                            <RowDefinition Height="8"/>
+                            <!-- Audio: MinHeight increased to show ~3 rows without scrolling —
+                                 avoids scroll-on-click confusion when the last row is selected. -->
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*" MinHeight="110"/>
+                            <RowDefinition Height="8"/>
+                            <!-- Subtitles: takes a proportional share of remaining space -->
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*" MinHeight="52"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Text="VIDEO" Style="{StaticResource SectionLabel}"/>
+
+                        <ListView Grid.Row="1" x:Name="TranscodeVideoList"
+                                  BorderThickness="1" BorderBrush="{DynamicResource BorderColor}"
+                                  ScrollViewer.VerticalScrollBarVisibility="Auto">
+                            <ListView.View>
+                                <GridView>
+                                    <!-- Track Info cell — background coloured per stream type:
+                                         DoVi       → #FFE08A amber
+                                         HDR10+     → #3498DB solid blue
+                                         Interlaced → #9B59B6 medium purple
+                                         White text on purple/blue, black on amber. -->
+                                    <GridViewColumn Header="Track Info" Width="280">
+                                        <GridViewColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <Border Padding="2,0">
+                                                    <Border.Style>
+                                                        <Style TargetType="Border">
                                                             <Style.Triggers>
                                                                 <DataTrigger Binding="{Binding HasDoVi}" Value="True">
-                                                                    <Setter Property="Foreground" Value="Black"/>
+                                                                    <Setter Property="Background" Value="#FFE08A"/>
                                                                 </DataTrigger>
                                                                 <DataTrigger Binding="{Binding HasHdr10Plus}" Value="True">
-                                                                    <Setter Property="Foreground" Value="White"/>
+                                                                    <Setter Property="Background" Value="#3498DB"/>
                                                                 </DataTrigger>
                                                                 <DataTrigger Binding="{Binding IsInterlaced}" Value="True">
-                                                                    <Setter Property="Foreground" Value="White"/>
+                                                                    <Setter Property="Background" Value="#9B59B6"/>
                                                                 </DataTrigger>
                                                             </Style.Triggers>
                                                         </Style>
-                                                    </TextBlock.Style>
-                                                </TextBlock>
-                                            </Border>
-                                        </DataTemplate>
-                                    </GridViewColumn.CellTemplate>
-                                </GridViewColumn>
-                                <!-- Resolution: not currently functional; dropdown disabled pending implementation -->
-                                <!-- Resolution: not currently functional; dropdown disabled pending Phase 2 implementation.
-                                     IMPORTANT: When enabled, must use IsEnabled="{Binding HasDoVi, Converter={StaticResource InverseBoolConverter}}"
-                                     to lock it for DoVi streams, same as Output Format and Preset. -->
-                                <GridViewColumn Header="Resolution" Width="110">
-                                    <GridViewColumn.CellTemplate>
-                                        <DataTemplate>
-                                            <ComboBox SelectedItem="{Binding Resolution, Mode=TwoWay}"
-                                                      ItemsSource="{StaticResource VideoResolutionOptions}"
-                                                      IsEnabled="False"
-                                                      Width="100"/>
-                                        </DataTemplate>
-                                    </GridViewColumn.CellTemplate>
-                                </GridViewColumn>
-                                <!-- Output Format: hevc uses hevc_nvenc + 10-bit pipeline; h.264 uses h264_nvenc;
-                                     copy (DoVi) is set automatically when a Dolby Vision RPU is detected and
-                                     cannot be changed — re-encoding would destroy the DoVi metadata. -->
-                                <GridViewColumn Header="Output Format" Width="140">
-                                    <GridViewColumn.CellTemplate>
-                                        <DataTemplate>
-                                            <ComboBox SelectedItem="{Binding OutputFormat, Mode=TwoWay}"
-                                                      ItemsSource="{StaticResource VideoOutputFormatOptions}"
-                                                      IsEnabled="{Binding HasDoVi, Converter={StaticResource InverseBoolConverter}}"
-                                                      Width="130"/>
-                                        </DataTemplate>
-                                    </GridViewColumn.CellTemplate>
-                                </GridViewColumn>
-                                <!-- Preset: None omits the -preset flag entirely; p1=fastest through p7=slowest/highest quality.
-                                     Disabled for DoVi streams since those use -c:v copy and have no encode preset.
-                                     Filled amber when the saved preset differs from the app default. -->
-                                <GridViewColumn Header="Preset" Width="90">
-                                    <GridViewColumn.CellTemplate>
-                                        <DataTemplate>
-                                            <ComboBox SelectedItem="{Binding Preset, Mode=TwoWay}"
-                                                      ItemsSource="{StaticResource VideoPresetOptions}"
-                                                      IsEnabled="{Binding HasDoVi, Converter={StaticResource InverseBoolConverter}}"
-                                                      Width="80"
-                                                      Background="{Binding PresetMismatch, Converter={StaticResource PresetMismatchBrushConverter}}"/>
-                                        </DataTemplate>
-                                    </GridViewColumn.CellTemplate>
-                                </GridViewColumn>
-                                <!-- Frame Rate: not currently functional; dropdown disabled pending implementation -->
-                                <GridViewColumn Header="Frame Rate" Width="130">
-                                    <GridViewColumn.CellTemplate>
-                                        <DataTemplate>
-                                            <ComboBox SelectedItem="{Binding FrameRate, Mode=TwoWay}"
-                                                      ItemsSource="{StaticResource VideoFrameRateOptions}"
-                                                      Width="120" IsEnabled="False"/>
-                                        </DataTemplate>
-                                    </GridViewColumn.CellTemplate>
-                                </GridViewColumn>
-                            </GridView>
-                        </ListView.View>
-                    </ListView>
+                                                    </Border.Style>
+                                                    <TextBlock Text="{Binding TrackInfo}"
+                                                               ToolTip="{Binding TrackInfo}">
+                                                        <TextBlock.Style>
+                                                            <Style TargetType="TextBlock">
+                                                                <Setter Property="Foreground" Value="{DynamicResource ForegroundColor}"/>
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding HasDoVi}" Value="True">
+                                                                        <Setter Property="Foreground" Value="Black"/>
+                                                                    </DataTrigger>
+                                                                    <DataTrigger Binding="{Binding HasHdr10Plus}" Value="True">
+                                                                        <Setter Property="Foreground" Value="White"/>
+                                                                    </DataTrigger>
+                                                                    <DataTrigger Binding="{Binding IsInterlaced}" Value="True">
+                                                                        <Setter Property="Foreground" Value="White"/>
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </TextBlock.Style>
+                                                    </TextBlock>
+                                                </Border>
+                                            </DataTemplate>
+                                        </GridViewColumn.CellTemplate>
+                                    </GridViewColumn>
+                                    <!-- Resolution: not currently functional; dropdown disabled pending implementation -->
+                                    <!-- Resolution: not currently functional; dropdown disabled pending Phase 2 implementation.
+                                         IMPORTANT: When enabled, must use IsEnabled="{Binding HasDoVi, Converter={StaticResource InverseBoolConverter}}"
+                                         to lock it for DoVi streams, same as Output Format and Preset. -->
+                                    <GridViewColumn Header="Resolution" Width="110">
+                                        <GridViewColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <ComboBox SelectedItem="{Binding Resolution, Mode=TwoWay}"
+                                                          ItemsSource="{StaticResource VideoResolutionOptions}"
+                                                          IsEnabled="False"
+                                                          Width="100"/>
+                                            </DataTemplate>
+                                        </GridViewColumn.CellTemplate>
+                                    </GridViewColumn>
+                                    <!-- Output Format: hevc uses hevc_nvenc + 10-bit pipeline; h.264 uses h264_nvenc;
+                                         copy (DoVi) is set automatically when a Dolby Vision RPU is detected and
+                                         cannot be changed — re-encoding would destroy the DoVi metadata. -->
+                                    <GridViewColumn Header="Output Format" Width="140">
+                                        <GridViewColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <ComboBox SelectedItem="{Binding OutputFormat, Mode=TwoWay}"
+                                                          ItemsSource="{StaticResource VideoOutputFormatOptions}"
+                                                          IsEnabled="{Binding HasDoVi, Converter={StaticResource InverseBoolConverter}}"
+                                                          Width="130"/>
+                                            </DataTemplate>
+                                        </GridViewColumn.CellTemplate>
+                                    </GridViewColumn>
+                                    <!-- Preset: None omits the -preset flag entirely; p1=fastest through p7=slowest/highest quality.
+                                         Disabled for DoVi streams since those use -c:v copy and have no encode preset.
+                                         Filled amber when the saved preset differs from the app default. -->
+                                    <GridViewColumn Header="Preset" Width="90">
+                                        <GridViewColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <ComboBox SelectedItem="{Binding Preset, Mode=TwoWay}"
+                                                          ItemsSource="{StaticResource VideoPresetOptions}"
+                                                          IsEnabled="{Binding HasDoVi, Converter={StaticResource InverseBoolConverter}}"
+                                                          Width="80"
+                                                          Background="{Binding PresetMismatch, Converter={StaticResource PresetMismatchBrushConverter}}"/>
+                                            </DataTemplate>
+                                        </GridViewColumn.CellTemplate>
+                                    </GridViewColumn>
+                                    <!-- Frame Rate: not currently functional; dropdown disabled pending implementation -->
+                                    <GridViewColumn Header="Frame Rate" Width="130">
+                                        <GridViewColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <ComboBox SelectedItem="{Binding FrameRate, Mode=TwoWay}"
+                                                          ItemsSource="{StaticResource VideoFrameRateOptions}"
+                                                          Width="120" IsEnabled="False"/>
+                                            </DataTemplate>
+                                        </GridViewColumn.CellTemplate>
+                                    </GridViewColumn>
+                                </GridView>
+                            </ListView.View>
+                        </ListView>
 
-                    <TextBlock Grid.Row="3" Text="AUDIO" Style="{StaticResource SectionLabel}"/>
+                        <TextBlock Grid.Row="3" Text="AUDIO" Style="{StaticResource SectionLabel}"/>
 
-                    <ListView Grid.Row="4" x:Name="TranscodeAudioList"
-                              BorderThickness="1" BorderBrush="{DynamicResource BorderColor}"
-                              ScrollViewer.VerticalScrollBarVisibility="Auto">
-                        <!-- Row styling: sub-rows get a light indent background to distinguish
-                             them visually from parent tracks. DataTrigger on IsSubRow. -->
-                        <ListView.ItemContainerStyle>
-                            <Style TargetType="ListViewItem">
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsSubRow}" Value="True">
-                                        <Setter Property="Background" Value="#2A2A2A"/>
-                                        <Setter Property="Padding" Value="16,0,0,0"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </ListView.ItemContainerStyle>
-                        <ListView.View>
-                            <GridView>
-                                <!-- IsSelected checkbox — default true, unchecking excludes track from output.
-                                     Unchecking a lossless parent also deselects all its sub-rows.
-                                     UpdateSourceTrigger=PropertyChanged ensures the binding writes back
-                                     to the model immediately on toggle, before View/Save Command reads it. -->
-                                <GridViewColumn Width="30">
-                                    <GridViewColumn.CellTemplate>
-                                        <DataTemplate>
-                                            <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                      HorizontalAlignment="Center"/>
-                                        </DataTemplate>
-                                    </GridViewColumn.CellTemplate>
-                                </GridViewColumn>
-                                <GridViewColumn Header="Track Info" Width="270" DisplayMemberBinding="{Binding TrackInfo}"/>
-                                <!-- Format: locked to Keep on lossless parent rows (copy only).
-                                     Sub-rows and lossy parent rows are freely editable. -->
-                                <GridViewColumn Header="Format" Width="110">
-                                    <GridViewColumn.CellTemplate>
-                                        <DataTemplate>
-                                            <ComboBox SelectedItem="{Binding Format, Mode=TwoWay}"
-                                                      ItemsSource="{StaticResource AudioFormatOptions}"
-                                                      IsEnabled="{Binding IsLossless, Converter={StaticResource InverseBoolConverter}}"
-                                                      Width="100"/>
-                                        </DataTemplate>
-                                    </GridViewColumn.CellTemplate>
-                                </GridViewColumn>
-                                <!-- Width: dynamic options driven by AvailableWidths on the track model.
-                                     Keep format → only "Keep"; encode format → Keep/5.1/Stereo based
-                                     on source channel count. Enabled only when Format is not Keep. -->
-                                <GridViewColumn Header="Width" Width="110">
-                                    <GridViewColumn.CellTemplate>
-                                        <DataTemplate>
-                                            <ComboBox SelectedItem="{Binding Width, Mode=TwoWay}"
-                                                      ItemsSource="{Binding AvailableWidths}"
-                                                      IsEnabled="{Binding IsLossless, Converter={StaticResource InverseBoolConverter}}"
-                                                      Width="100"/>
-                                        </DataTemplate>
-                                    </GridViewColumn.CellTemplate>
-                                </GridViewColumn>
-                                <!-- Bit Rate: dynamic options driven by AvailableBitRates on the track model.
-                                     Keep format → only "Keep"; Stereo width → capped at 640;
-                                     lossy source → further capped at source bitrate. -->
-                                <GridViewColumn Header="Bit Rate (Kbps)" Width="130">
-                                    <GridViewColumn.CellTemplate>
-                                        <DataTemplate>
-                                            <ComboBox SelectedItem="{Binding BitRate, Mode=TwoWay}"
-                                                      ItemsSource="{Binding AvailableBitRates}"
-                                                      IsEnabled="{Binding IsLossless, Converter={StaticResource InverseBoolConverter}}"
-                                                      Width="120"/>
-                                        </DataTemplate>
-                                    </GridViewColumn.CellTemplate>
-                                </GridViewColumn>
-                                <!-- + / - button column: + appears on lossless parent rows to add a derived
-                                     lossy sub-row. - appears on sub-rows to remove them. -->
-                                <GridViewColumn Width="30">
-                                    <GridViewColumn.CellTemplate>
-                                        <DataTemplate>
-                                            <!-- + button: visible on lossless parent rows only -->
-                                            <Button Content="+"
-                                                    Width="22" Height="22"
-                                                    FontWeight="Bold"
-                                                    Click="AddDerivedRow_Click"
-                                                    Tag="{Binding}"
-                                                    Visibility="{Binding IsLossless, Converter={StaticResource BoolToVisibility}}"/>
-                                        </DataTemplate>
-                                    </GridViewColumn.CellTemplate>
-                                </GridViewColumn>
-                                <!-- — button column: visible on sub-rows only -->
-                                <GridViewColumn Width="30">
-                                    <GridViewColumn.CellTemplate>
-                                        <DataTemplate>
-                                            <Button Content="—"
-                                                    Width="22" Height="22"
-                                                    Click="RemoveDerivedRow_Click"
-                                                    Tag="{Binding}"
-                                                    Visibility="{Binding IsSubRow, Converter={StaticResource BoolToVisibility}}"/>
-                                        </DataTemplate>
-                                    </GridViewColumn.CellTemplate>
-                                </GridViewColumn>
-                            </GridView>
-                        </ListView.View>
-                    </ListView>
+                        <ListView Grid.Row="4" x:Name="TranscodeAudioList"
+                                  BorderThickness="1" BorderBrush="{DynamicResource BorderColor}"
+                                  ScrollViewer.VerticalScrollBarVisibility="Auto">
+                            <!-- Row styling: sub-rows get a light indent background to distinguish
+                                 them visually from parent tracks. DataTrigger on IsSubRow. -->
+                            <ListView.ItemContainerStyle>
+                                <Style TargetType="ListViewItem">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsSubRow}" Value="True">
+                                            <Setter Property="Background" Value="#2A2A2A"/>
+                                            <Setter Property="Padding" Value="16,0,0,0"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ListView.ItemContainerStyle>
+                            <ListView.View>
+                                <GridView>
+                                    <!-- IsSelected checkbox — default true, unchecking excludes track from output.
+                                         Unchecking a lossless parent also deselects all its sub-rows.
+                                         UpdateSourceTrigger=PropertyChanged ensures the binding writes back
+                                         to the model immediately on toggle, before View/Save Command reads it. -->
+                                    <GridViewColumn Width="30">
+                                        <GridViewColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                          HorizontalAlignment="Center"/>
+                                            </DataTemplate>
+                                        </GridViewColumn.CellTemplate>
+                                    </GridViewColumn>
+                                    <GridViewColumn Header="Track Info" Width="270" DisplayMemberBinding="{Binding TrackInfo}"/>
+                                    <!-- Format: locked to Keep on lossless parent rows (copy only).
+                                         Sub-rows and lossy parent rows are freely editable. -->
+                                    <GridViewColumn Header="Format" Width="110">
+                                        <GridViewColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <ComboBox SelectedItem="{Binding Format, Mode=TwoWay}"
+                                                          ItemsSource="{StaticResource AudioFormatOptions}"
+                                                          IsEnabled="{Binding IsLossless, Converter={StaticResource InverseBoolConverter}}"
+                                                          Width="100"/>
+                                            </DataTemplate>
+                                        </GridViewColumn.CellTemplate>
+                                    </GridViewColumn>
+                                    <!-- Width: dynamic options driven by AvailableWidths on the track model.
+                                         Keep format → only "Keep"; encode format → Keep/5.1/Stereo based
+                                         on source channel count. Enabled only when Format is not Keep. -->
+                                    <GridViewColumn Header="Width" Width="110">
+                                        <GridViewColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <ComboBox SelectedItem="{Binding Width, Mode=TwoWay}"
+                                                          ItemsSource="{Binding AvailableWidths}"
+                                                          IsEnabled="{Binding IsLossless, Converter={StaticResource InverseBoolConverter}}"
+                                                          Width="100"/>
+                                            </DataTemplate>
+                                        </GridViewColumn.CellTemplate>
+                                    </GridViewColumn>
+                                    <!-- Bit Rate: dynamic options driven by AvailableBitRates on the track model.
+                                         Keep format → only "Keep"; Stereo width → capped at 640;
+                                         lossy source → further capped at source bitrate. -->
+                                    <GridViewColumn Header="Bit Rate (Kbps)" Width="130">
+                                        <GridViewColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <ComboBox SelectedItem="{Binding BitRate, Mode=TwoWay}"
+                                                          ItemsSource="{Binding AvailableBitRates}"
+                                                          IsEnabled="{Binding IsLossless, Converter={StaticResource InverseBoolConverter}}"
+                                                          Width="120"/>
+                                            </DataTemplate>
+                                        </GridViewColumn.CellTemplate>
+                                    </GridViewColumn>
+                                    <!-- + / - button column: + appears on lossless parent rows to add a derived
+                                         lossy sub-row. - appears on sub-rows to remove them. -->
+                                    <GridViewColumn Width="30">
+                                        <GridViewColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <!-- + button: visible on lossless parent rows only -->
+                                                <Button Content="+"
+                                                        Width="22" Height="22"
+                                                        FontWeight="Bold"
+                                                        Click="AddDerivedRow_Click"
+                                                        Tag="{Binding}"
+                                                        Visibility="{Binding IsLossless, Converter={StaticResource BoolToVisibility}}"/>
+                                            </DataTemplate>
+                                        </GridViewColumn.CellTemplate>
+                                    </GridViewColumn>
+                                    <!-- — button column: visible on sub-rows only -->
+                                    <GridViewColumn Width="30">
+                                        <GridViewColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <Button Content="—"
+                                                        Width="22" Height="22"
+                                                        Click="RemoveDerivedRow_Click"
+                                                        Tag="{Binding}"
+                                                        Visibility="{Binding IsSubRow, Converter={StaticResource BoolToVisibility}}"/>
+                                            </DataTemplate>
+                                        </GridViewColumn.CellTemplate>
+                                    </GridViewColumn>
+                                </GridView>
+                            </ListView.View>
+                        </ListView>
 
-                    <TextBlock Grid.Row="6" Text="SUBTITLES" Style="{StaticResource SectionLabel}"/>
+                        <TextBlock Grid.Row="6" Text="SUBTITLES" Style="{StaticResource SectionLabel}"/>
 
-                    <ListView Grid.Row="7" x:Name="TranscodeSubtitleList"
-                              BorderThickness="1" BorderBrush="{DynamicResource BorderColor}"
-                              ScrollViewer.VerticalScrollBarVisibility="Auto">
-                        <ListView.View>
-                            <GridView>
-                                <GridViewColumn Header="Track Info" Width="280" DisplayMemberBinding="{Binding TrackInfo}"/>
-                                <GridViewColumn Header="# of Frames" Width="100" DisplayMemberBinding="{Binding FrameCount}"/>
-                                <GridViewColumn Header="Default" Width="70">
-                                    <GridViewColumn.CellTemplate>
-                                        <DataTemplate>
-                                            <CheckBox IsChecked="{Binding IsDefault}" IsEnabled="False"/>
-                                        </DataTemplate>
-                                    </GridViewColumn.CellTemplate>
-                                </GridViewColumn>
-                                <GridViewColumn Header="Forced" Width="60">
-                                    <GridViewColumn.CellTemplate>
-                                        <DataTemplate>
-                                            <CheckBox IsChecked="{Binding IsForced}" IsEnabled="False"/>
-                                        </DataTemplate>
-                                    </GridViewColumn.CellTemplate>
-                                </GridViewColumn>
-                                <GridViewColumn Header="Burn" Width="60">
-                                    <GridViewColumn.CellTemplate>
-                                        <DataTemplate>
-                                            <CheckBox IsChecked="{Binding Burn}"
-                                                      IsEnabled="{Binding BurnEnabled}"
-                                                      Click="BurnSubtitle_Click"/>
-                                        </DataTemplate>
-                                    </GridViewColumn.CellTemplate>
-                                </GridViewColumn>
-                            </GridView>
-                        </ListView.View>
-                    </ListView>
+                        <ListView Grid.Row="7" x:Name="TranscodeSubtitleList"
+                                  BorderThickness="1" BorderBrush="{DynamicResource BorderColor}"
+                                  ScrollViewer.VerticalScrollBarVisibility="Auto">
+                            <ListView.View>
+                                <GridView>
+                                    <GridViewColumn Header="Track Info" Width="280" DisplayMemberBinding="{Binding TrackInfo}"/>
+                                    <GridViewColumn Header="# of Frames" Width="100" DisplayMemberBinding="{Binding FrameCount}"/>
+                                    <GridViewColumn Header="Default" Width="70">
+                                        <GridViewColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <CheckBox IsChecked="{Binding IsDefault}" IsEnabled="False"/>
+                                            </DataTemplate>
+                                        </GridViewColumn.CellTemplate>
+                                    </GridViewColumn>
+                                    <GridViewColumn Header="Forced" Width="60">
+                                        <GridViewColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <CheckBox IsChecked="{Binding IsForced}" IsEnabled="False"/>
+                                            </DataTemplate>
+                                        </GridViewColumn.CellTemplate>
+                                    </GridViewColumn>
+                                    <GridViewColumn Header="Burn" Width="60">
+                                        <GridViewColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <CheckBox IsChecked="{Binding Burn}"
+                                                          IsEnabled="{Binding BurnEnabled}"
+                                                          Click="BurnSubtitle_Click"/>
+                                            </DataTemplate>
+                                        </GridViewColumn.CellTemplate>
+                                    </GridViewColumn>
+                                </GridView>
+                            </ListView.View>
+                        </ListView>
+                    </Grid>
+
                 </Grid>
-
             </Grid>
+
+            <!-- Rip mode -->
+            <local:RipView x:Name="RipContent"
+                           Margin="12,10,12,10"
+                           Visibility="Collapsed"/>
         </Grid>
     </DockPanel>
 </Window>
