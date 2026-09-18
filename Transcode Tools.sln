@@ -5,6 +5,18 @@ VisualStudioVersion = 17.14.37027.9
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TranscodeTools", "TranscodeTools\TranscodeTools.csproj", "{93ABE97F-83AE-F5EC-75CD-DD48DD7D2E3C}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{5708C2BE-C504-4F51-B703-B130202236AF}"
+	ProjectSection(SolutionItems) = preProject
+		docs\Development_Rules.md = docs\Development_Rules.md
+		docs\TranscodeTools_Reference.md = docs\TranscodeTools_Reference.md
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "handoffs", "handoffs", "{7B02ADFA-1FBC-40FD-A0AB-99DB3B03A031}"
+	ProjectSection(SolutionItems) = preProject
+		docs\handoffs\MOVIE_NAMER_SESSION_HANDOFF_2026-09-16.md = docs\handoffs\MOVIE_NAMER_SESSION_HANDOFF_2026-09-16.md
+		docs\handoffs\movie_namer_handoff.md = docs\handoffs\movie_namer_handoff.md
+	EndProjectSection
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -18,6 +30,9 @@ Global
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{7B02ADFA-1FBC-40FD-A0AB-99DB3B03A031} = {5708C2BE-C504-4F51-B703-B130202236AF}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {18BEBBD9-4933-43F5-8DB0-915B8B84E076}
