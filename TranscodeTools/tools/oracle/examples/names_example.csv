@@ -1,0 +1,7 @@
+title,vts,chapters,duration,current_file,new_name,confidence,source,read_from_image,pgc,button,note
+1,1,5,2:24:09,C1_t00.mkv,,,,VTS_01_0_menu0_pgc9_cell1_buttons.png,9,1,
+2,1,5,1:33:43,C2_t01.mkv,,,,VTS_01_0_menu0_pgc9_cell1_buttons.png,9,2,
+3,1,9,3:57:52,B1_t02.mkv,,,,VTS_01_0_root_pgc1_cell1_buttons.png,1,1,play-all: same runtime as titles 1+2 - likely skip
+4,2,2,0:03:04,A1_t03.mkv,,,,,,,no menu button reaches this title
+5,3,2,0:00:24,A1_t04.mkv,,,,VIDEO_TS_menu0_pgc3_cell1_buttons.png,3,1,
+6,4,2,0:00:14,B1_t05.mkv,,,,,,,no menu button reaches this title

@@ -1,0 +1,6 @@
+Preserve dvdmenumap.py as the port oracle
+
+Add the Python dvdmenumap.py and its examples\ under tools\oracle\.
+It is the reference the C# port of the ripping/naming engine is
+checked against: run both on the same disc and diff the JSON. The
+script retires once that diff is clean.
