@@ -59,6 +59,24 @@ public static class DiscStore
         return discs;
     }
 
+    // Reads one disc's record, or null when there isn't one. Used before
+    // starting a disc, so the user can be told what is already recorded
+    // before it is replaced.
+    public static DiscRecord? TryLoad(string destination, string discName)
+    {
+        var path = Path.Combine(DiscFolder(destination, discName), RecordFileName);
+        if (!File.Exists(path)) return null;
+
+        try
+        {
+            return JsonSerializer.Deserialize<DiscRecord>(File.ReadAllText(path), JsonOptions);
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
     // Writes the record to a temporary file first, then swaps it into
     // place, so a crash mid-write never leaves a half-written disc.json.
     public static void Save(string destination, DiscRecord disc)

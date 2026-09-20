@@ -48,6 +48,39 @@
             </Grid>
         </ControlTemplate>
 
+        <!-- Same grip lying down, for the splitter between the drives/jobs
+             band and the row below it. -->
+        <ControlTemplate x:Key="GripSplitterH" TargetType="GridSplitter">
+            <Grid Background="Transparent">
+                <StackPanel Orientation="Horizontal"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center">
+                    <Ellipse Width="4" Height="4" Fill="{DynamicResource SubtleForeground}" Margin="2,0,2,0"/>
+                    <Ellipse Width="4" Height="4" Fill="{DynamicResource SubtleForeground}" Margin="2,0,2,0"/>
+                    <Ellipse Width="4" Height="4" Fill="{DynamicResource SubtleForeground}" Margin="2,0,2,0"/>
+                </StackPanel>
+            </Grid>
+        </ControlTemplate>
+
+        <!-- A failed job's status text. One colour for both themes: the
+             theme itself is frozen, so this is local to Rip mode rather
+             than a new theme key. It is legible on the light panel and
+             the dark one alike. -->
+        <SolidColorBrush x:Key="JobErrorForeground" Color="#D64545"/>
+
+        <!-- Job status cell: the theme's foreground normally, the error
+             colour when the job failed. Only the text changes colour;
+             the row keeps its normal background. -->
+        <Style x:Key="JobStatusText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource ForegroundColor}"/>
+            <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsError}" Value="True">
+                    <Setter Property="Foreground" Value="{StaticResource JobErrorForeground}"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
         <!-- Screen chip: one per source screen in the strip above the picture.
              The checked chip is the screen being shown. Foreground reaches the
              content through TextElement.Foreground, as custom templates must. -->
@@ -93,10 +126,11 @@
             <ColumnDefinition Width="*" MinWidth="240"/>
         </Grid.ColumnDefinitions>
         <Grid.RowDefinitions>
-            <RowDefinition Height="32"/>     <!-- Destination -->
-            <RowDefinition Height="110"/>    <!-- Drives | jobs -->
-            <RowDefinition Height="*"/>      <!-- Left column | chips + picture -->
-            <RowDefinition Height="Auto"/>   <!-- Status -->
+            <RowDefinition Height="32"/>                    <!-- Destination -->
+            <RowDefinition Height="110" MinHeight="70"/>    <!-- Drives | jobs -->
+            <RowDefinition Height="8"/>                     <!-- Splitter -->
+            <RowDefinition Height="*" MinHeight="180"/>     <!-- Left column | chips + picture -->
+            <RowDefinition Height="Auto"/>                  <!-- Status -->
         </Grid.RowDefinitions>
 
         <!-- Destination line: same picker design as Input/Output Directory -->
@@ -167,16 +201,48 @@
                       ScrollViewer.VerticalScrollBarVisibility="Auto">
                 <ListView.View>
                     <GridView>
-                        <GridViewColumn Header="Disc"   Width="180"/>
-                        <GridViewColumn Header="Step"   Width="90"/>
-                        <GridViewColumn Header="Status" Width="260"/>
+                        <GridViewColumn Header="Disc" Width="180"
+                                        DisplayMemberBinding="{Binding Disc, TargetNullValue=''}"/>
+                        <GridViewColumn Header="Step" Width="90"
+                                        DisplayMemberBinding="{Binding Step, TargetNullValue=''}"/>
+                        <GridViewColumn Header="Status" Width="230">
+                            <GridViewColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Style="{StaticResource JobStatusText}"
+                                               Text="{Binding Status, TargetNullValue=''}"
+                                               ToolTip="{Binding Status, TargetNullValue=''}"/>
+                                </DataTemplate>
+                            </GridViewColumn.CellTemplate>
+                        </GridViewColumn>
+                        <GridViewColumn Header="" Width="90">
+                            <GridViewColumn.CellTemplate>
+                                <DataTemplate>
+                                    <Button Content="Cancel"
+                                            Style="{StaticResource FlatButton}"
+                                            Padding="12,2"
+                                            Visibility="{Binding CancelVisibility}"
+                                            Click="Cancel_Click"/>
+                                </DataTemplate>
+                            </GridViewColumn.CellTemplate>
+                        </GridViewColumn>
                     </GridView>
                 </ListView.View>
             </ListView>
         </Grid>
 
+        <!-- Splitter between the drives/jobs band and the row below.
+             The two boxes share the band's height, so a machine with
+             several drives can be given more of it. -->
+        <GridSplitter Grid.Row="2" Grid.ColumnSpan="3"
+                      HorizontalAlignment="Stretch"
+                      VerticalAlignment="Stretch"
+                      ResizeDirection="Rows"
+                      ResizeBehavior="PreviousAndNext"
+                      Background="Transparent"
+                      Template="{StaticResource GripSplitterH}"/>
+
         <!-- Splitter for the disc column and the picture side -->
-        <GridSplitter Grid.Row="2" Grid.Column="1"
+        <GridSplitter Grid.Row="3" Grid.Column="1"
                       Margin="0,8,0,0"
                       HorizontalAlignment="Stretch"
                       VerticalAlignment="Stretch"
@@ -186,7 +252,7 @@
                       Template="{StaticResource GripSplitter}"/>
 
         <!-- Left column: disc list, switching to the selected disc's titles -->
-        <Grid Grid.Row="2" Grid.Column="0" Margin="0,8,0,0">
+        <Grid Grid.Row="3" Grid.Column="0" Margin="0,8,0,0">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
@@ -248,7 +314,7 @@
         </Grid>
 
         <!-- Right side: chip strip above the menu picture -->
-        <Grid Grid.Row="2" Grid.Column="2" Margin="0,8,0,0">
+        <Grid Grid.Row="3" Grid.Column="2" Margin="0,8,0,0">
             <Grid.RowDefinitions>
                 <RowDefinition Height="32"/>   <!-- Chip strip: fixed so the picture never moves -->
                 <RowDefinition Height="6"/>
@@ -314,7 +380,7 @@
         </Grid>
 
         <!-- Status line -->
-        <TextBlock Grid.Row="3" Grid.ColumnSpan="3"
+        <TextBlock Grid.Row="4" Grid.ColumnSpan="3"
                    x:Name="StatusText"
                    Foreground="{DynamicResource SubtleForeground}"
                    FontSize="12"

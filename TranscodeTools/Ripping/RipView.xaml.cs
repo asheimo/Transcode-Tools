@@ -8,8 +8,10 @@
 // screen that names it; clicking a chip shows that screen with
 // its buttons outlined and the naming button highlighted.
 //
-// The records are empty until the ported engine writes them.
-// Jobs are not wired yet.
+// Start runs the disc read: the IFO parse (port seam 1) on a
+// background thread, reported through a row in the jobs list, and
+// saved as the disc's record. The rest of the engine -- buttons,
+// frames, MakeMKV -- joins the same job as each seam lands.
 // ============================================================
 
 using System.Collections.ObjectModel;
@@ -32,6 +34,7 @@ public partial class RipView : UserControl
     public ObservableCollection<OpticalDriveRow> Drives { get; } = new();
     public ObservableCollection<DiscRecord>      Discs  { get; } = new();
     public ObservableCollection<ScreenChip>      Chips  { get; } = new();
+    public ObservableCollection<RipJob>          Jobs   { get; } = new();
 
     // The Destination currently loaded, or "" before one is chosen.
     private string _destination = "";
@@ -52,6 +55,10 @@ public partial class RipView : UserControl
     // being repopulated from code (same pattern as the Input/Output boxes).
     private bool _suppressDestinationSelection;
 
+    // Drive letters with a job running on them. One job per drive: the
+    // drive's Start stays disabled until its job ends.
+    private readonly HashSet<string> _busyDrives = new(StringComparer.OrdinalIgnoreCase);
+
     private const string NoTitleSelectedText =
         "Select a disc title to see the menu screen it was named from.";
 
@@ -61,6 +68,7 @@ public partial class RipView : UserControl
         DriveList.ItemsSource = Drives;
         DiscList.ItemsSource  = Discs;
         ChipStrip.ItemsSource = Chips;
+        JobList.ItemsSource   = Jobs;
         ShowPlaceholder(NoTitleSelectedText);
     }
 
@@ -194,30 +202,135 @@ public partial class RipView : UserControl
         }
     }
 
-    // Sets each drive row's Start button: enabled only when the drive has
-    // a disc, a Destination is chosen and no job is running for the drive.
-    // The tooltip carries the reason when it is disabled.
+    // Sets each drive row's Start button: enabled when the drive has a
+    // disc and no job is running for it. The tooltip carries the reason
+    // when it is disabled.
+    //
+    // A missing Destination deliberately does NOT disable Start. A
+    // disabled button raises no click, so the only thing it could offer
+    // is a tooltip, and that is too quiet for the one mistake that stops
+    // everything. Start stays live and says what is wrong.
     private void UpdateStartButtons()
     {
         foreach (var drive in Drives)
         {
             if (!drive.HasDisc)
                 drive.SetStart(false, "No disc in this drive.");
-            else if (_destination.Length == 0)
-                drive.SetStart(false, "Choose a Destination first.");
+            else if (_busyDrives.Contains(drive.Letter))
+                drive.SetStart(false, $"{drive.Letter} is already running.");
             else
                 drive.SetStart(true, $"Start {drive.Label}.");
         }
     }
 
-    // The disc engine is not ported yet, so Start has nothing to run.
-    // It says so rather than doing nothing silently.
-    private void Start_Click(object sender, RoutedEventArgs e)
+    // ── Start ────────────────────────────────────────────────────────
+
+    private async void Start_Click(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is not OpticalDriveRow drive) return;
-        StatusText.Text = $"Start pressed for {drive.Letter} ({drive.Label}). " +
-                          "The disc engine is not built yet, so nothing runs.";
+
+        // Each refusal names itself on the status line. The button's own
+        // IsEnabled already covers these, but if the two ever disagree a
+        // silent return leaves a button that does nothing at all.
+        if (!drive.HasDisc)
+        {
+            StatusText.Text = $"{drive.Letter} reports no disc. Eject and reinsert it, or wait for the drive to spin up.";
+            return;
+        }
+        if (_destination.Length == 0)
+        {
+            MessageBox.Show(
+                "Please set a destination folder.",
+                "No Destination",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+        if (_busyDrives.Contains(drive.Letter))
+        {
+            StatusText.Text = $"{drive.Letter} is already running.";
+            return;
+        }
+
+        // The disc's name is its volume label: it names the folder under
+        // Discs\ and Rip\ and the ISO file, so a label that cannot be a
+        // folder name has to stop here rather than half way through.
+        var name = drive.Label;
+        if (name == "(no label)" || name.IndexOfAny(System.IO.Path.GetInvalidFileNameChars()) >= 0)
+        {
+            StatusText.Text = $"{drive.Letter} cannot be started: \"{name}\" cannot be used as a folder name.";
+            return;
+        }
+
+        var existing = DiscStore.TryLoad(_destination, name);
+        if (existing != null && !ConfirmReplace(existing))
+        {
+            StatusText.Text = $"{name} left as it was.";
+            return;
+        }
+
+        var job = new RipJob(name, drive.Letter) { Status = "starting" };
+        Jobs.Add(job);
+        _busyDrives.Add(drive.Letter);
+        UpdateStartButtons();
+
+        // Progress is created here, on the UI thread, so its callbacks
+        // come back to the UI thread and can touch the job's bindings.
+        var progress = new Progress<string>(message => job.Status = message);
+        var source   = drive.Letter + System.IO.Path.DirectorySeparatorChar;
+
+        try
+        {
+            var record = await Task.Run(() =>
+            {
+                var disc = DiscAnalysis.ReadDisc(name, source, progress, job.Token);
+                DiscStore.Save(_destination, disc);
+                return disc;
+            }, job.Token);
+
+            job.Finish($"{Count(record.Titles.Count, "title")}, {Count(record.Screens.Count, "screen")}", false);
+            LoadDiscs();
+        }
+        catch (OperationCanceledException)
+        {
+            job.Finish("Cancelled.", false);
+        }
+        catch (Exception ex)
+        {
+            // Every failure is visible and carries the program's own
+            // message rather than a house one that hides it.
+            job.Finish(ex.Message, true);
+        }
+        finally
+        {
+            _busyDrives.Remove(drive.Letter);
+            UpdateStartButtons();
+        }
     }
+
+    // Reading a disc that already has a record replaces it, so it asks
+    // first and says what is being replaced.
+    private static bool ConfirmReplace(DiscRecord existing)
+    {
+        var answer = MessageBox.Show(
+            $"{existing.Name} already has a record: " +
+            $"{Count(existing.Titles.Count, "title")}, {Count(existing.Screens.Count, "screen")}, " +
+            $"read {existing.CreatedUtc.ToLocalTime():d MMM yyyy HH:mm}.\n\n" +
+            "Read the disc again and replace it?",
+            "Disc Already Read",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+
+        return answer == MessageBoxResult.Yes;
+    }
+
+    private void Cancel_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is RipJob job)
+            job.Cancel();
+    }
+
+    private static string Count(int n, string noun) => n == 1 ? $"1 {noun}" : $"{n} {noun}s";
 
     private static OpticalDriveRow ReadDrive(DriveInfo drive)
     {
