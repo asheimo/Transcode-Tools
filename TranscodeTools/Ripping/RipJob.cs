@@ -3,6 +3,9 @@
 // ------------------------------------------------------------
 // One row in the jobs list, and the work behind it.
 //
+// A row is added when a disc's backup completes, and waits with a
+// Start button until the IFO read is started from it.
+//
 // A job outlives the drive it started from, which is why it is its
 // own object rather than state on the drive row. It runs off the UI
 // thread and reports through IProgress<string>; the Python oracle
@@ -26,19 +29,26 @@ namespace TranscodeTools;
 
 public sealed class RipJob : INotifyPropertyChanged
 {
-    private readonly CancellationTokenSource _cancel = new();
+    private CancellationTokenSource? _cancel;
 
     public string Disc  { get; }
     public string Drive { get; }
 
-    public RipJob(string disc, string drive)
+    // The Destination the disc was backed up under. Kept on the job
+    // because the view's Destination can be changed while it waits.
+    public string Destination { get; }
+
+    // A job is added once its disc's backup completes and waits,
+    // Ready, until its Start is pressed.
+    public RipJob(string disc, string drive, string destination)
     {
-        Disc  = disc;
-        Drive = drive;
+        Disc        = disc;
+        Drive       = drive;
+        Destination = destination;
     }
 
     // The pipeline stage: Backup, Info, Rip or Analyse. Only Analyse
-    // exists while seam 1 is the whole engine.
+    // runs from the jobs list while seam 1 is the whole engine.
     private string _step = "Analyse";
     public string Step
     {
@@ -48,13 +58,14 @@ public sealed class RipJob : INotifyPropertyChanged
 
     // What the job is doing now while it runs, and what came of it when
     // it stops. A failure leaves the program's own message here.
-    private string _status = "";
+    private string _status = "ready";
     public string Status
     {
         get => _status;
         set { if (_status == value) return; _status = value; OnPropertyChanged(); }
     }
 
+    // A failed job's row turns red. The text stays the theme's colour.
     private bool _isError;
     public bool IsError
     {
@@ -62,45 +73,60 @@ public sealed class RipJob : INotifyPropertyChanged
         set { if (_isError == value) return; _isError = value; OnPropertyChanged(); }
     }
 
-    // Cancel is a button only while there is something to cancel; a
-    // finished row leaves the cell empty rather than showing a dead
-    // button, since FlatButton has no disabled look.
-    private bool _isRunning = true;
-    public bool IsRunning
+    private JobState _state = JobState.Ready;
+    public JobState State
     {
-        get => _isRunning;
-        set
+        get => _state;
+        private set
         {
-            if (_isRunning == value) return;
-            _isRunning = value;
+            if (_state == value) return;
+            _state = value;
             OnPropertyChanged();
-            OnPropertyChanged(nameof(CancelVisibility));
+            OnPropertyChanged(nameof(IsRunning));
+            OnPropertyChanged(nameof(ActionText));
+            OnPropertyChanged(nameof(ActionVisibility));
         }
     }
 
-    public Visibility CancelVisibility => IsRunning ? Visibility.Visible : Visibility.Collapsed;
+    public bool IsRunning => State == JobState.Running;
 
-    public CancellationToken Token => _cancel.Token;
+    // The row's button: Start while ready, Cancel while running. A
+    // finished row leaves the cell empty rather than showing a dead
+    // button, since FlatButton has no disabled look.
+    public string     ActionText       => State == JobState.Running ? "Cancel" : "Start";
+    public Visibility ActionVisibility => State == JobState.Finished ? Visibility.Collapsed : Visibility.Visible;
+
+    public CancellationToken Token => _cancel?.Token ?? CancellationToken.None;
+
+    public void Begin()
+    {
+        _cancel  = new CancellationTokenSource();
+        IsError  = false;
+        State    = JobState.Running;
+    }
 
     public void Cancel()
     {
         if (!IsRunning) return;
         Status = "Cancelling...";
-        _cancel.Cancel();
+        _cancel?.Cancel();
     }
 
     public void Finish(string status, bool isError)
     {
-        Status    = status;
-        IsError   = isError;
-        IsRunning = false;
-        _cancel.Dispose();
+        Status  = status;
+        IsError = isError;
+        State   = JobState.Finished;
+        _cancel?.Dispose();
+        _cancel = null;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? name = null) =>
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }
+
+public enum JobState { Ready, Running, Finished }
 
 public static class DiscAnalysis
 {
@@ -125,9 +151,8 @@ public static class DiscAnalysis
             Name       = discName,
             SourcePath = videoTs,
             CreatedUtc = DateTime.UtcNow,
-            // RipFolder is left empty until a rip writes files there.
-            // Storing the path now would bake in a Destination the
-            // record can be moved out from under.
+            // RipFolder is not saved; DiscStore sets it from where the
+            // record is stored.
         };
 
         int read = 0;

@@ -95,6 +95,7 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
                         <!-- MPV -->
@@ -132,6 +133,13 @@
                         <TextBox   Grid.Row="5" Grid.Column="1" x:Name="TbxMKVMerge"     VerticalContentAlignment="Center"     Margin="0,8,0,8"  Padding="6,4"/>
                         <Button    Grid.Row="5" Grid.Column="2" Content="Where"          Style="{StaticResource SmallButton}"  Margin="6,8,0,8"  Click="WhereMKVMerge_Click"/>
                         <Button    Grid.Row="5" Grid.Column="3" Content="Browse"         Style="{StaticResource SmallButton}"  Margin="4,8,0,8"  Click="BrowseMKVMerge_Click"/>
+
+                        <!-- MakeMKV: makemkvcon64.exe, used by Rip mode's Backup.
+                             Not required at startup; Backup asks for it when empty. -->
+                        <TextBlock Grid.Row="6" Grid.Column="0" Text="MakeMKV"           Style="{StaticResource PrefLabel}"    Margin="0,10,10,10"/>
+                        <TextBox   Grid.Row="6" Grid.Column="1" x:Name="TbxMakeMKV"      VerticalContentAlignment="Center"     Margin="0,8,0,8"  Padding="6,4"/>
+                        <Button    Grid.Row="6" Grid.Column="2" Content="Where"          Style="{StaticResource SmallButton}"  Margin="6,8,0,8"  Click="WhereMakeMKV_Click"/>
+                        <Button    Grid.Row="6" Grid.Column="3" Content="Browse"         Style="{StaticResource SmallButton}"  Margin="4,8,0,8"  Click="BrowseMakeMKV_Click"/>
 
                     </Grid>
                 </ScrollViewer>

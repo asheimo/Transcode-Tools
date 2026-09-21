@@ -61,6 +61,15 @@ public sealed class AppSettings
     public string MKVPropEdit_Path     { get; set; } = "";
     public string MKVMerge_Path        { get; set; } = "";
 
+    // MakeMKV's command-line program (makemkvcon64.exe), used by Rip
+    // mode's Backup. Deliberately NOT in AllPathsSet() below: that check
+    // runs at startup for everyone, and someone who only remuxes or
+    // transcodes should not be asked for MakeMKV. Backup refuses with a
+    // message naming this setting when it is empty. When the planned
+    // Rip/Remux/Transcode mode checkboxes land, the requirement moves
+    // there: required only when Rip mode is enabled.
+    public string MakeMKV_Path         { get; set; } = "";
+
     // ── Default/options strings ──────────────────────────────────────
     // These match the original My.Settings defaults exactly.
     public string MKVMerge_Defaults       { get; set; } = "";

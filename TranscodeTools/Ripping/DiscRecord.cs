@@ -3,15 +3,18 @@
 // ------------------------------------------------------------
 // The per-disc record: everything the rip and analysis steps
 // learn about one disc. It is the ripping "config" -- saved as
-// <Destination>\Discs\<DISC>\disc.json (see DiscStore) and
+// <Destination>\Rip\<DISC>\Menu\disc.json (see DiscStore) and
 // reloaded on the next run, so it must stand on its own once
-// the ISO is deleted.
+// the ISO is deleted. It is meant to go when the rip folder is
+// deleted after remux.
 //
 // Field names follow the Python oracle (dvdmenumap.py) so the
 // two can be compared field by field. Deliberately NOT here yet:
 // the menu graph. Its shape comes from the resolver port; it is
 // added then, and records saved before that simply lack it.
 // ============================================================
+
+using System.Text.Json.Serialization;
 
 namespace TranscodeTools;
 
@@ -22,7 +25,7 @@ public sealed class DiscRecord
     public int SchemaVersion { get; set; } = 1;
 
     // Volume label, e.g. "THE_CENTENNIAL". Also the folder name under
-    // Discs\, Rip\ and the ISO file name.
+    // Rip\ and the ISO file name.
     public string Name { get; set; } = "";
 
     // Where the disc was read from: the drive or the mounted ISO.
@@ -31,6 +34,10 @@ public sealed class DiscRecord
     public DateTime CreatedUtc { get; set; }
 
     // Full path of this disc's rip folder, <Destination>\Rip\<DISC>.
+    // Not saved: it is the folder the record was found in, set by
+    // DiscStore on load and save, so moving the folder cannot leave a
+    // stale path in the record.
+    [JsonIgnore]
     public string RipFolder { get; set; } = "";
 
     public List<TitleRecord>  Titles  { get; set; } = new();
@@ -105,7 +112,7 @@ public sealed class ScreenRecord
     public int    Pgc    { get; set; }
     public int    Cell   { get; set; }
 
-    // Cached frame, file name relative to the disc's folder. Null when
+    // Cached frame, file name relative to the Menu folder. Null when
     // no picture was extracted for this screen.
     public string? Image { get; set; }
 

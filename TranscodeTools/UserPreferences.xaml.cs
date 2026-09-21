@@ -37,6 +37,7 @@ public partial class UserPreferences : Window
         string FFprobe_Path,
         string MKVPropEdit_Path,
         string MKVMerge_Path,
+        string MakeMKV_Path,
         string MKVMerge_Defaults,
         string MKVMerge_Options,
         string RoboCopy_Defaults,
@@ -76,6 +77,7 @@ public partial class UserPreferences : Window
             s.FFprobe_Path,
             s.MKVPropEdit_Path,
             s.MKVMerge_Path,
+            s.MakeMKV_Path,
             s.MKVMerge_Defaults,
             s.MKVMerge_Options,
             s.RoboCopy_Defaults,
@@ -124,6 +126,7 @@ public partial class UserPreferences : Window
         TbxFFprobe.Text        = s.FFprobe_Path;
         TbxMKVPropEdit.Text    = s.MKVPropEdit_Path;
         TbxMKVMerge.Text       = s.MKVMerge_Path;
+        TbxMakeMKV.Text        = s.MakeMKV_Path;
 
         // Encode tab — vendor selector (triggers panel swap via SelectionChanged)
         CbxGpuVendor.SelectedItem = s.GpuVendor;
@@ -189,6 +192,7 @@ public partial class UserPreferences : Window
         s.FFprobe_Path      = TbxFFprobe.Text;
         s.MKVPropEdit_Path  = TbxMKVPropEdit.Text;
         s.MKVMerge_Path     = TbxMKVMerge.Text;
+        s.MakeMKV_Path      = TbxMakeMKV.Text;
 
         // Encode
         s.GpuVendor = CbxGpuVendor.SelectedItem as string ?? "NVIDIA";
@@ -265,6 +269,7 @@ public partial class UserPreferences : Window
         s.FFprobe_Path            = _snapshot.FFprobe_Path;
         s.MKVPropEdit_Path        = _snapshot.MKVPropEdit_Path;
         s.MKVMerge_Path           = _snapshot.MKVMerge_Path;
+        s.MakeMKV_Path            = _snapshot.MakeMKV_Path;
         s.MKVMerge_Defaults       = _snapshot.MKVMerge_Defaults;
         s.MKVMerge_Options        = _snapshot.MKVMerge_Options;
         s.RoboCopy_Defaults       = _snapshot.RoboCopy_Defaults;
@@ -365,6 +370,7 @@ public partial class UserPreferences : Window
     private void WhereFFprobe_Click(object sender, RoutedEventArgs e)       => TbxFFprobe.Text      = RunWhere("ffprobe");
     private void WhereMKVPropEdit_Click(object sender, RoutedEventArgs e)   => TbxMKVPropEdit.Text  = RunWhere("mkvpropedit");
     private void WhereMKVMerge_Click(object sender, RoutedEventArgs e)      => TbxMKVMerge.Text     = RunWhere("mkvmerge");
+    private void WhereMakeMKV_Click(object sender, RoutedEventArgs e)       => TbxMakeMKV.Text      = RunWhere("makemkvcon64");
 
     // ── Browse buttons ───────────────────────────────────────────────
     private void BrowseMPV_Click(object sender, RoutedEventArgs e)          => TbxMPV.Text          = BrowseForExe() ?? TbxMPV.Text;
@@ -373,6 +379,7 @@ public partial class UserPreferences : Window
     private void BrowseFFprobe_Click(object sender, RoutedEventArgs e)      => TbxFFprobe.Text      = BrowseForExe() ?? TbxFFprobe.Text;
     private void BrowseMKVPropEdit_Click(object sender, RoutedEventArgs e)  => TbxMKVPropEdit.Text  = BrowseForExe() ?? TbxMKVPropEdit.Text;
     private void BrowseMKVMerge_Click(object sender, RoutedEventArgs e)     => TbxMKVMerge.Text     = BrowseForExe() ?? TbxMKVMerge.Text;
+    private void BrowseMakeMKV_Click(object sender, RoutedEventArgs e)      => TbxMakeMKV.Text      = BrowseForExe() ?? TbxMakeMKV.Text;
 
     // ── Helpers ──────────────────────────────────────────────────────
 

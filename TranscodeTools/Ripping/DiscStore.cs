@@ -1,14 +1,24 @@
 // ============================================================
 // DiscStore.cs
 // ------------------------------------------------------------
-// Saves and loads disc records. Layout under the Destination:
+// Rip mode's folder layout under the Destination, and saving and
+// loading the disc records kept in it.
 //
-//   <Destination>\Discs\<DISC>\disc.json   the record
-//   <Destination>\Discs\<DISC>\*.png       cached menu frames
+//   <Destination>\
+//       ISO\<DISC>.iso                    MakeMKV's backup image
+//       Rip\<DISC>\                       the rips; remux reads this folder
+//           Menu\disc.json                the disc record
+//           Menu\*.png                    cached menu frames
+//       Reserve\                          space held for running jobs
+//       Logs\Backup\<DISC>.log            one per disc, overwritten on a repeat
+//       Logs\<timestamp>\<DISC>\          info/rip/naming logs
 //
-// Same pattern as the Remux/Transcode settings, which live in a
-// mode folder with a subfolder per item. JSON via System.Text.Json,
-// the same way AppSettings is saved.
+// The record lives inside the rip folder on purpose: when that
+// folder is deleted after remux, the record goes with it. The
+// backup log under Logs\Backup\ is what survives, as the history
+// of which discs have been processed.
+//
+// JSON via System.Text.Json, the same way AppSettings is saved.
 // ============================================================
 
 using System.IO;
@@ -18,38 +28,68 @@ namespace TranscodeTools;
 
 public static class DiscStore
 {
-    public const string DiscsFolderName = "Discs";
-    public const string RecordFileName  = "disc.json";
+    public const string IsoFolderName    = "ISO";
+    public const string RipFolderName    = "Rip";
+    public const string MenuFolderName   = "Menu";
+    public const string LogsFolderName   = "Logs";
+    public const string BackupFolderName = "Backup";
+    public const string RecordFileName   = "disc.json";
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
-    public static string DiscsFolder(string destination) =>
-        Path.Combine(destination, DiscsFolderName);
+    // ── Paths ────────────────────────────────────────────────────────
 
+    public static string IsoFolder(string destination) =>
+        Path.Combine(destination, IsoFolderName);
+
+    public static string IsoPath(string destination, string discName) =>
+        Path.Combine(IsoFolder(destination), discName + ".iso");
+
+    public static string RipRoot(string destination) =>
+        Path.Combine(destination, RipFolderName);
+
+    public static string RipFolder(string destination, string discName) =>
+        Path.Combine(RipRoot(destination), discName);
+
+    // The disc's Menu folder: its record and its cached menu frames.
     public static string DiscFolder(string destination, string discName) =>
-        Path.Combine(DiscsFolder(destination), discName);
+        Path.Combine(RipFolder(destination, discName), MenuFolderName);
 
-    // Reads every disc record under <Destination>\Discs\, sorted by name.
+    public static string BackupLogFolder(string destination) =>
+        Path.Combine(destination, LogsFolderName, BackupFolderName);
+
+    public static string BackupLogPath(string destination, string discName) =>
+        Path.Combine(BackupLogFolder(destination), discName + ".log");
+
+    // ── Records ──────────────────────────────────────────────────────
+
+    // Reads every disc record under <Destination>\Rip\, sorted by name.
+    // A rip folder with no Menu\disc.json is not a problem; it is skipped.
     // A record that can't be read is not skipped silently: its folder and
     // the reason go into `problems` so the caller can show them.
     public static List<DiscRecord> LoadAll(string destination, List<string> problems)
     {
         var discs = new List<DiscRecord>();
-        var root  = DiscsFolder(destination);
+        var root  = RipRoot(destination);
         if (!Directory.Exists(root)) return discs;
 
         foreach (var folder in Directory.GetDirectories(root).OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
         {
-            var path = Path.Combine(folder, RecordFileName);
+            var path = Path.Combine(folder, MenuFolderName, RecordFileName);
             if (!File.Exists(path)) continue;
 
             try
             {
                 var disc = JsonSerializer.Deserialize<DiscRecord>(File.ReadAllText(path), JsonOptions);
                 if (disc == null)
+                {
                     problems.Add($"{Path.GetFileName(folder)}: {RecordFileName} is empty");
-                else
-                    discs.Add(disc);
+                    continue;
+                }
+
+                // Not stored: the rip folder is wherever the record was found.
+                disc.RipFolder = folder;
+                discs.Add(disc);
             }
             catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
             {
@@ -57,24 +97,6 @@ public static class DiscStore
             }
         }
         return discs;
-    }
-
-    // Reads one disc's record, or null when there isn't one. Used before
-    // starting a disc, so the user can be told what is already recorded
-    // before it is replaced.
-    public static DiscRecord? TryLoad(string destination, string discName)
-    {
-        var path = Path.Combine(DiscFolder(destination, discName), RecordFileName);
-        if (!File.Exists(path)) return null;
-
-        try
-        {
-            return JsonSerializer.Deserialize<DiscRecord>(File.ReadAllText(path), JsonOptions);
-        }
-        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
-        {
-            return null;
-        }
     }
 
     // Writes the record to a temporary file first, then swaps it into
@@ -88,5 +110,7 @@ public static class DiscStore
         var temp = path + ".tmp";
         File.WriteAllText(temp, JsonSerializer.Serialize(disc, JsonOptions));
         File.Move(temp, path, overwrite: true);
+
+        disc.RipFolder = RipFolder(destination, disc.Name);
     }
 }

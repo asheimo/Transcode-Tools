@@ -3,15 +3,21 @@
 // ------------------------------------------------------------
 // Rip mode's content. The Destination picker and its history,
 // the optical drive list, and the disc list bound to the disc
-// records under <Destination>\Discs\. Selecting a disc lists its
-// disc titles; selecting a disc title shows a chip per menu
-// screen that names it; clicking a chip shows that screen with
+// records under <Destination>\Rip\<DISC>\Menu\. Selecting a disc
+// lists its disc titles; selecting a disc title shows a chip per
+// menu screen that names it; clicking a chip shows that screen with
 // its buttons outlined and the naming button highlighted.
 //
-// Start runs the disc read: the IFO parse (port seam 1) on a
-// background thread, reported through a row in the jobs list, and
-// saved as the disc's record. The rest of the engine -- buttons,
-// frames, MakeMKV -- joins the same job as each seam lands.
+// The drive row owns the backup. Its button reads Backup, then
+// Cancel while MakeMKV runs (the row fills green with MakeMKV's own
+// progress), then Eject on success or Log on failure (the row turns
+// red). Nothing appears in the jobs list until a backup completes.
+//
+// A completed backup adds a row to the jobs list with a Start
+// button. Start runs the disc read: the IFO parse (port seam 1) off
+// the optical drive on a background thread, saved as the disc's
+// record. The rest of the engine joins the same job as each seam
+// lands.
 // ============================================================
 
 using System.Collections.ObjectModel;
@@ -21,10 +27,13 @@ using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Runtime.InteropServices;
 using System.Windows.Interop;
+using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using Microsoft.Win32;
+using Microsoft.Win32.SafeHandles;
 
 namespace TranscodeTools;
 
@@ -55,8 +64,8 @@ public partial class RipView : UserControl
     // being repopulated from code (same pattern as the Input/Output boxes).
     private bool _suppressDestinationSelection;
 
-    // Drive letters with a job running on them. One job per drive: the
-    // drive's Start stays disabled until its job ends.
+    // Drive letters with an IFO read running on them. A backup or an
+    // eject on that drive waits for the read, which takes under a second.
     private readonly HashSet<string> _busyDrives = new(StringComparer.OrdinalIgnoreCase);
 
     private const string NoTitleSelectedText =
@@ -130,7 +139,6 @@ public partial class RipView : UserControl
 
         _destination = folder;
         LoadDiscs();
-        UpdateStartButtons();
     }
 
     // Repopulates the dropdown from saved history. Text is set inside the
@@ -175,63 +183,73 @@ public partial class RipView : UserControl
 
         // Reading a drive that is spinning up can block for seconds, so the
         // scan runs off the UI thread.
-        var rows = await Task.Run(() => DriveInfo.GetDrives()
+        var readings = await Task.Run(() => DriveInfo.GetDrives()
             .Where(d => d.DriveType == DriveType.CDRom)
             .Select(d => ReadDrive(d))
             .ToList());
 
         if (ticket != _driveRefreshTicket) return;
 
-        Drives.Clear();
-        foreach (var row in rows)
-            Drives.Add(row);
-        UpdateStartButtons();
+        // Rows are updated in place rather than rebuilt: a row carries its
+        // backup, and a disc inserted in another drive must not reset it.
+        foreach (var row in Drives.ToList())
+            if (!readings.Any(r => r.Letter.Equals(row.Letter, StringComparison.OrdinalIgnoreCase)) &&
+                row.State != DriveState.BackingUp)
+                Drives.Remove(row);
+
+        foreach (var reading in readings)
+        {
+            var row = Drives.FirstOrDefault(r => r.Letter.Equals(reading.Letter, StringComparison.OrdinalIgnoreCase));
+            if (row != null)
+            {
+                row.Update(reading.Label, reading.HasDisc);
+                continue;
+            }
+
+            row = new OpticalDriveRow(reading.Letter, reading.Label, reading.HasDisc);
+            int at = 0;
+            while (at < Drives.Count && string.Compare(Drives[at].Letter, row.Letter, StringComparison.OrdinalIgnoreCase) < 0)
+                at++;
+            Drives.Insert(at, row);
+        }
 
         // The disc count from LoadDiscs takes the status line once a
         // Destination is loaded; until then it reports the drives and
         // says what is needed before a disc can start.
         if (_destination.Length == 0)
         {
-            var found = rows.Count switch
+            var found = readings.Count switch
             {
                 0 => "No optical drives found.",
                 1 => "1 optical drive found.",
-                _ => $"{rows.Count} optical drives found."
+                _ => $"{readings.Count} optical drives found."
             };
-            StatusText.Text = rows.Count == 0 ? found : $"{found} Choose a Destination to start a disc.";
+            StatusText.Text = readings.Count == 0 ? found : $"{found} Choose a Destination to start a disc.";
         }
     }
 
-    // Sets each drive row's Start button: enabled when the drive has a
-    // disc and no job is running for it. The tooltip carries the reason
-    // when it is disabled.
-    //
-    // A missing Destination deliberately does NOT disable Start. A
-    // disabled button raises no click, so the only thing it could offer
-    // is a tooltip, and that is too quiet for the one mistake that stops
-    // everything. Start stays live and says what is wrong.
-    private void UpdateStartButtons()
-    {
-        foreach (var drive in Drives)
-        {
-            if (!drive.HasDisc)
-                drive.SetStart(false, "No disc in this drive.");
-            else if (_busyDrives.Contains(drive.Letter))
-                drive.SetStart(false, $"{drive.Letter} is already running.");
-            else
-                drive.SetStart(true, $"Start {drive.Label}.");
-        }
-    }
-
-    // ── Start ────────────────────────────────────────────────────────
-
-    private async void Start_Click(object sender, RoutedEventArgs e)
+    // One button per drive row. What it does follows the row's state:
+    // Backup, Cancel, Eject or Log.
+    private async void DriveButton_Click(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is not OpticalDriveRow drive) return;
 
-        // Each refusal names itself on the status line. The button's own
-        // IsEnabled already covers these, but if the two ever disagree a
-        // silent return leaves a button that does nothing at all.
+        switch (drive.State)
+        {
+            case DriveState.Idle:      await BackupAsync(drive); break;
+            case DriveState.BackingUp: drive.CancelBackup();      break;
+            case DriveState.Done:      await EjectAsync(drive);  break;
+            case DriveState.Failed:    OpenBackupLog(drive);     break;
+        }
+    }
+
+    // ── Backup ───────────────────────────────────────────────────────
+
+    private async Task BackupAsync(OpticalDriveRow drive)
+    {
+        // Each refusal says what is wrong. The button's IsEnabled already
+        // covers a missing disc, but if the two ever disagree a silent
+        // return leaves a button that does nothing at all.
         if (!drive.HasDisc)
         {
             StatusText.Text = $"{drive.Letter} reports no disc. Eject and reinsert it, or wait for the drive to spin up.";
@@ -246,50 +264,191 @@ public partial class RipView : UserControl
                 MessageBoxImage.Warning);
             return;
         }
-        if (_busyDrives.Contains(drive.Letter))
+
+        var makeMkv = AppSettings.Instance.MakeMKV_Path;
+        if (string.IsNullOrWhiteSpace(makeMkv))
         {
-            StatusText.Text = $"{drive.Letter} is already running.";
+            MessageBox.Show(
+                "Please set the MakeMKV path in Preferences.",
+                "MakeMKV Path Not Set",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+        if (!File.Exists(makeMkv))
+        {
+            MessageBox.Show(
+                $"MakeMKV was not found at {makeMkv}.",
+                "MakeMKV Not Found",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
             return;
         }
 
-        // The disc's name is its volume label: it names the folder under
-        // Discs\ and Rip\ and the ISO file, so a label that cannot be a
-        // folder name has to stop here rather than half way through.
+        if (_busyDrives.Contains(drive.Letter))
+        {
+            StatusText.Text = $"{drive.Letter} is being read. Back it up once the read finishes.";
+            return;
+        }
+
+        // The disc's name is its volume label: it names the ISO, the rip
+        // folder and the log, so a label that cannot be a file name has to
+        // stop here rather than half way through.
         var name = drive.Label;
         if (name == "(no label)" || name.IndexOfAny(System.IO.Path.GetInvalidFileNameChars()) >= 0)
         {
-            StatusText.Text = $"{drive.Letter} cannot be started: \"{name}\" cannot be used as a folder name.";
+            StatusText.Text = $"{drive.Letter} cannot be backed up: \"{name}\" cannot be used as a file name.";
             return;
         }
 
-        var existing = DiscStore.TryLoad(_destination, name);
-        if (existing != null && !ConfirmReplace(existing))
+        var destination = _destination;
+        var isoPath     = DiscStore.IsoPath(destination, name);
+        var logPath     = DiscStore.BackupLogPath(destination, name);
+
+        // A disc seen before: asked on what is actually on disk. No stops
+        // and nothing is deleted.
+        if (File.Exists(isoPath))
         {
-            StatusText.Text = $"{name} left as it was.";
+            if (!Confirm($"{name} already exists. Overwrite?"))
+            {
+                StatusText.Text = $"{name} left as it was.";
+                return;
+            }
+            try
+            {
+                File.Delete(isoPath);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                StatusText.Text = $"{name}: the existing ISO could not be removed: {ex.Message}";
+                return;
+            }
+        }
+        else if (File.Exists(logPath))
+        {
+            if (!Confirm($"{name} has been processed before. Back it up again?"))
+            {
+                StatusText.Text = $"{name} left as it was.";
+                return;
+            }
+        }
+
+        drive.BeginBackup(name, logPath);
+        StatusText.Text = $"Backing up {name} from {drive.Letter}.";
+
+        // Progress is created here, on the UI thread, so its callbacks
+        // come back to the UI thread and can touch the row's bindings.
+        var progress = new Progress<double>(fraction => drive.Progress = fraction);
+
+        try
+        {
+            await Task.Run(() => BackupJob.RunAsync(
+                makeMkv, drive.Letter, name, isoPath, logPath, progress, drive.BackupToken));
+
+            drive.FinishBackup(DriveState.Done);
+            Jobs.Add(new RipJob(name, drive.Letter, destination));
+            StatusText.Text = $"{name} backed up to {isoPath}.";
+        }
+        catch (OperationCanceledException)
+        {
+            drive.FinishBackup(DriveState.Idle);
+            StatusText.Text = $"{name} backup cancelled.";
+        }
+        catch (Exception ex) when (ex is BackupException or IOException or UnauthorizedAccessException)
+        {
+            // Every failure is visible and carries the program's own
+            // message rather than a house one that hides it.
+            drive.FinishBackup(DriveState.Failed);
+            StatusText.Text = $"{name} backup failed: {ex.Message}";
+        }
+    }
+
+    private static bool Confirm(string message) =>
+        MessageBox.Show(message, "Backup", MessageBoxButton.YesNo, MessageBoxImage.Question)
+            == MessageBoxResult.Yes;
+
+    private void OpenBackupLog(OpticalDriveRow drive)
+    {
+        if (drive.LogPath is not { } path || !File.Exists(path))
+        {
+            StatusText.Text = $"No backup log was written for {drive.BackupDisc}.";
+            return;
+        }
+        Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+    }
+
+    private async Task EjectAsync(OpticalDriveRow drive)
+    {
+        if (_busyDrives.Contains(drive.Letter))
+        {
+            StatusText.Text = $"{drive.Letter} is being read. Eject it once the read finishes.";
             return;
         }
 
-        var job = new RipJob(name, drive.Letter) { Status = "starting" };
-        Jobs.Add(job);
-        _busyDrives.Add(drive.Letter);
-        UpdateStartButtons();
+        try
+        {
+            await Task.Run(() => OpticalDrive.Eject(drive.Letter));
+        }
+        catch (Win32Exception ex)
+        {
+            StatusText.Text = $"{drive.Letter} could not be ejected: {ex.Message}";
+            return;
+        }
+
+        // The drive reports the change itself; refreshing here as well
+        // covers a drive that does not.
+        _ = RefreshDrivesAsync();
+    }
+
+    // ── Jobs ─────────────────────────────────────────────────────────
+
+    private async void JobAction_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not RipJob job) return;
+
+        if (job.IsRunning)
+            job.Cancel();
+        else if (job.State == JobState.Ready)
+            await RunAnalysisAsync(job);
+    }
+
+    // The IFO read, off the optical drive. The disc must still be the
+    // one that was backed up: a disc ejected or swapped since is said
+    // so, and the row stays ready for when it is back.
+    private async Task RunAnalysisAsync(RipJob job)
+    {
+        if (_busyDrives.Contains(job.Drive))
+        {
+            job.Status = $"{job.Drive} is already being read.";
+            return;
+        }
+        if (!DiscIsIn(job.Drive, job.Disc))
+        {
+            job.Status = $"{job.Disc} is not in {job.Drive}.";
+            return;
+        }
+
+        job.Begin();
+        job.Status = "starting";
+        _busyDrives.Add(job.Drive);
 
         // Progress is created here, on the UI thread, so its callbacks
         // come back to the UI thread and can touch the job's bindings.
         var progress = new Progress<string>(message => job.Status = message);
-        var source   = drive.Letter + System.IO.Path.DirectorySeparatorChar;
+        var source   = job.Drive + System.IO.Path.DirectorySeparatorChar;
 
         try
         {
             var record = await Task.Run(() =>
             {
-                var disc = DiscAnalysis.ReadDisc(name, source, progress, job.Token);
-                DiscStore.Save(_destination, disc);
+                var disc = DiscAnalysis.ReadDisc(job.Disc, source, progress, job.Token);
+                DiscStore.Save(job.Destination, disc);
                 return disc;
             }, job.Token);
 
             job.Finish($"{Count(record.Titles.Count, "title")}, {Count(record.Screens.Count, "screen")}", false);
-            LoadDiscs();
+            if (job.Destination.Equals(_destination, StringComparison.OrdinalIgnoreCase))
+                LoadDiscs();
         }
         catch (OperationCanceledException)
         {
@@ -303,47 +462,39 @@ public partial class RipView : UserControl
         }
         finally
         {
-            _busyDrives.Remove(drive.Letter);
-            UpdateStartButtons();
+            _busyDrives.Remove(job.Drive);
         }
     }
 
-    // Reading a disc that already has a record replaces it, so it asks
-    // first and says what is being replaced.
-    private static bool ConfirmReplace(DiscRecord existing)
+    private static bool DiscIsIn(string letter, string discName)
     {
-        var answer = MessageBox.Show(
-            $"{existing.Name} already has a record: " +
-            $"{Count(existing.Titles.Count, "title")}, {Count(existing.Screens.Count, "screen")}, " +
-            $"read {existing.CreatedUtc.ToLocalTime():d MMM yyyy HH:mm}.\n\n" +
-            "Read the disc again and replace it?",
-            "Disc Already Read",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Question);
-
-        return answer == MessageBoxResult.Yes;
-    }
-
-    private void Cancel_Click(object sender, RoutedEventArgs e)
-    {
-        if ((sender as FrameworkElement)?.DataContext is RipJob job)
-            job.Cancel();
+        try
+        {
+            var drive = new DriveInfo(letter);
+            return drive.IsReady && drive.VolumeLabel.Equals(discName, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is IOException or ArgumentException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     private static string Count(int n, string noun) => n == 1 ? $"1 {noun}" : $"{n} {noun}s";
 
-    private static OpticalDriveRow ReadDrive(DriveInfo drive)
+    private sealed record DriveReading(string Letter, string Label, bool HasDisc);
+
+    private static DriveReading ReadDrive(DriveInfo drive)
     {
         var letter = drive.Name.TrimEnd('\\');
         try
         {
-            if (!drive.IsReady) return new OpticalDriveRow(letter, "No disc", hasDisc: false);
+            if (!drive.IsReady) return new DriveReading(letter, "No disc", false);
             var label = string.IsNullOrEmpty(drive.VolumeLabel) ? "(no label)" : drive.VolumeLabel;
-            return new OpticalDriveRow(letter, label, hasDisc: true);
+            return new DriveReading(letter, label, true);
         }
         catch (IOException)
         {
-            return new OpticalDriveRow(letter, "No disc", hasDisc: false);
+            return new DriveReading(letter, "No disc", false);
         }
     }
 
@@ -577,33 +728,204 @@ public partial class RipView : UserControl
     }
 }
 
-// One row in the drives box. CanStart and StartHint change when a
-// Destination is chosen, so they notify the Start button's bindings.
+// Colours for Rip mode's row states. The theme is frozen, so these
+// are local rather than theme keys. Both are translucent: laid over
+// the row they tint whatever surface is under it, so the theme's own
+// text stays legible in the light and dark themes alike.
+public static class RipColors
+{
+    public static readonly Color BackupFill = Color.FromArgb(0x59, 0x43, 0xA0, 0x47);
+    public static readonly Color Failed     = Color.FromArgb(0x59, 0xD6, 0x45, 0x45);
+
+    public static readonly SolidColorBrush FailedRow = Frozen(new SolidColorBrush(Failed));
+
+    private static T Frozen<T>(T brush) where T : Freezable
+    {
+        brush.Freeze();
+        return brush;
+    }
+}
+
+public enum DriveState { Idle, BackingUp, Done, Failed }
+
+// One row in the drives box. The row owns its disc's backup: the
+// state, the progress fill and the cancel all live here, and the row
+// survives drive refreshes so a backup is never reset by one.
 public sealed class OpticalDriveRow : INotifyPropertyChanged
 {
-    public string Letter  { get; }
-    public string Label   { get; }
-    public bool   HasDisc { get; }
+    public string Letter { get; }
 
     public OpticalDriveRow(string letter, string label, bool hasDisc)
     {
-        Letter  = letter;
-        Label   = label;
-        HasDisc = hasDisc;
+        Letter   = letter;
+        _label   = label;
+        _hasDisc = hasDisc;
     }
 
-    public bool   CanStart  { get; private set; }
-    public string StartHint { get; private set; } = "";
-
-    public void SetStart(bool canStart, string hint)
+    private string _label;
+    public string Label
     {
-        CanStart  = canStart;
-        StartHint = hint;
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanStart)));
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StartHint)));
+        get => _label;
+        private set { if (_label == value) return; _label = value; OnPropertyChanged(); }
+    }
+
+    private bool _hasDisc;
+    public bool HasDisc
+    {
+        get => _hasDisc;
+        private set { if (_hasDisc == value) return; _hasDisc = value; OnPropertyChanged(); }
+    }
+
+    public DriveState State { get; private set; } = DriveState.Idle;
+
+    // The disc the last backup was of, and its log.
+    public string  BackupDisc { get; private set; } = "";
+    public string? LogPath    { get; private set; }
+
+    private CancellationTokenSource? _backupCancel;
+    public CancellationToken BackupToken => _backupCancel?.Token ?? CancellationToken.None;
+
+    private double _progress;
+    public double Progress
+    {
+        get => _progress;
+        set
+        {
+            if (Math.Abs(_progress - value) < 0.001) return;
+            _progress = value;
+            Changed();
+        }
+    }
+
+    // From a drive refresh. A finished or failed backup belongs to the
+    // disc it was of: once that disc is out, the row is ready for the
+    // next. A running backup is never touched.
+    public void Update(string label, bool hasDisc)
+    {
+        bool discChanged = hasDisc != HasDisc || label != Label;
+        Label   = label;
+        HasDisc = hasDisc;
+
+        if (discChanged && State is DriveState.Done or DriveState.Failed)
+            State = DriveState.Idle;
+
+        Changed();
+    }
+
+    public void BeginBackup(string discName, string logPath)
+    {
+        BackupDisc    = discName;
+        LogPath       = logPath;
+        _progress     = 0;
+        _backupCancel = new CancellationTokenSource();
+        State         = DriveState.BackingUp;
+        Changed();
+    }
+
+    public void CancelBackup() => _backupCancel?.Cancel();
+
+    public void FinishBackup(DriveState state)
+    {
+        _backupCancel?.Dispose();
+        _backupCancel = null;
+        State = state;
+        Changed();
+    }
+
+    // ── What the view binds to ───────────────────────────────────────
+
+    public string ButtonText => State switch
+    {
+        DriveState.BackingUp => "Cancel",
+        DriveState.Done      => "Eject",
+        DriveState.Failed    => "Log",
+        _                    => "Backup",
+    };
+
+    // Disabled only for a drive with no disc. A missing Destination
+    // does not disable it: a disabled button raises no click, so all it
+    // could offer is a tooltip, which is too quiet for that mistake.
+    public bool CanPress => State != DriveState.Idle || HasDisc;
+
+    public string ButtonHint => State switch
+    {
+        DriveState.BackingUp => $"Backing up {BackupDisc}: {Progress:P0}. Click to cancel.",
+        DriveState.Done      => $"Eject {BackupDisc}.",
+        DriveState.Failed    => $"The backup of {BackupDisc} failed. Open its log.",
+        _                    => HasDisc ? $"Back up {Label}." : "No disc in this drive.",
+    };
+
+    // Green up to the backup's progress while it runs, red after a
+    // failure, nothing otherwise.
+    public Brush? RowBrush => State switch
+    {
+        DriveState.BackingUp => ProgressBrush(Progress),
+        DriveState.Failed    => RipColors.FailedRow,
+        _                    => null,
+    };
+
+    public bool HasRowBrush => RowBrush != null;
+
+    // A hard edge at the progress point: the fill colour to the left,
+    // clear to the right.
+    private static Brush ProgressBrush(double fraction)
+    {
+        var brush = new LinearGradientBrush { StartPoint = new Point(0, 0.5), EndPoint = new Point(1, 0.5) };
+        brush.GradientStops.Add(new GradientStop(RipColors.BackupFill, 0));
+        brush.GradientStops.Add(new GradientStop(RipColors.BackupFill, fraction));
+        brush.GradientStops.Add(new GradientStop(Colors.Transparent, fraction));
+        brush.GradientStops.Add(new GradientStop(Colors.Transparent, 1));
+        brush.Freeze();
+        return brush;
+    }
+
+    private void Changed()
+    {
+        OnPropertyChanged(nameof(State));
+        OnPropertyChanged(nameof(ButtonText));
+        OnPropertyChanged(nameof(CanPress));
+        OnPropertyChanged(nameof(ButtonHint));
+        OnPropertyChanged(nameof(RowBrush));
+        OnPropertyChanged(nameof(HasRowBrush));
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
+    private void OnPropertyChanged([CallerMemberName] string? name = null) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+}
+
+// Ejects an optical drive's tray. .NET has no call for this, so it
+// goes to the drive directly: open the volume, then send it
+// IOCTL_STORAGE_EJECT_MEDIA.
+internal static class OpticalDrive
+{
+    private const uint GenericRead           = 0x80000000;
+    private const uint FileShareReadWrite    = 0x00000003;
+    private const uint OpenExisting          = 3;
+    private const uint IoctlStorageEjectMedia = 0x002D4808;
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern SafeFileHandle CreateFile(
+        string fileName, uint access, uint share, IntPtr security,
+        uint creation, uint flags, IntPtr template);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool DeviceIoControl(
+        SafeFileHandle device, uint code, IntPtr inBuffer, uint inSize,
+        IntPtr outBuffer, uint outSize, out uint returned, IntPtr overlapped);
+
+    // Throws Win32Exception with Windows' own message on failure.
+    public static void Eject(string driveLetter)
+    {
+        using var handle = CreateFile(
+            $@"\\.\{driveLetter.TrimEnd('\\')}", GenericRead, FileShareReadWrite,
+            IntPtr.Zero, OpenExisting, 0, IntPtr.Zero);
+        if (handle.IsInvalid)
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+
+        if (!DeviceIoControl(handle, IoctlStorageEjectMedia, IntPtr.Zero, 0, IntPtr.Zero, 0, out _, IntPtr.Zero))
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+    }
 }
 
 // One chip in the strip above the picture: a screen and one of its
