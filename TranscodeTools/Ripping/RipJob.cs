@@ -15,13 +15,12 @@
 // thread and reports through IProgress<string>; the Python oracle
 // printed the same messages to stdout, which would vanish here.
 //
-// Seam 1 fills the record from the IFOs only: the title table and
-// the menu program chains with their cells. Buttons need the VM
-// decode to carry a command, so ButtonSets stays empty until seam 2
-// rather than being written half-filled -- on disk a half-filled
-// button set is indistinguishable from a disc with no menu buttons.
-// NavPacks stays 0 for the same reason: counting them means walking
-// the cell's VOB sectors, which is the scan that reads the buttons.
+// The read fills the record from the IFOs (seam 1: the title table
+// and the menu program chains with their cells) and then from each
+// menu cell's VOB sectors (seam 2: NavPacks and the button sets, each
+// button with its rectangle, arrow-key neighbours and decoded
+// command). A button's Resolved target stays empty until the PGC
+// resolver (seam 3).
 // ============================================================
 
 using System.ComponentModel;
@@ -185,6 +184,8 @@ public static class DiscAnalysis
                 var titles  = ifo.Kind == IfoKind.Vmg ? ReadTitles(ifo).ToList() : new List<TitleRecord>();
                 var screens = ReadScreens(ifo).ToList();
 
+                ScanScreens(videoTs, name, screens, progress, problems, token);
+
                 record.Titles.AddRange(titles);
                 record.Screens.AddRange(screens);
                 read++;
@@ -205,6 +206,56 @@ public static class DiscAnalysis
             progress.Report($"skipped: {problem}");
 
         return record;
+    }
+
+    // Fills NavPacks and ButtonSets on each screen from its cell's sectors
+    // in the IFO's menu VOB. A missing VOB or a cell that can't be read
+    // leaves that screen's buttons empty and is reported, never silent.
+    private static void ScanScreens(
+        string videoTs, string ifoName, List<ScreenRecord> screens,
+        IProgress<string> progress, List<string> problems, CancellationToken token)
+    {
+        if (screens.Count == 0) return;
+
+        MenuVob? vob;
+        try
+        {
+            vob = MenuVob.Open(videoTs, ifoName);
+        }
+        catch (DiscSourceException ex)
+        {
+            problems.Add(ex.Message);
+            return;
+        }
+        if (vob == null)
+        {
+            problems.Add($"{ifoName}: no menu VOB, so its {screens.Count} screen(s) have no buttons");
+            return;
+        }
+
+        using (vob)
+        {
+            progress.Report($"scanning {vob.FileName}");
+            foreach (var screen in screens)
+            {
+                var scan = vob.ScanCell(screen.FirstSector, screen.LastSector, token);
+                if (scan.Problem != null) problems.Add(scan.Problem);
+
+                screen.NavPacks   = scan.NavPacks;
+                screen.ButtonSets = scan.ButtonSets.Select((set, i) => new ButtonSetRecord
+                {
+                    Number  = i + 1,
+                    Buttons = set.Select(b => new ButtonRecord
+                    {
+                        Number      = b.Number,
+                        X0 = b.X0, Y0 = b.Y0, X1 = b.X1, Y1 = b.Y1,
+                        Up = b.Up, Down = b.Down, Left = b.Left, Right = b.Right,
+                        CommandText = b.Command.Text,
+                        Raw         = b.Command.Raw,
+                    }).ToList(),
+                }).ToList();
+            }
+        }
     }
 
     private static IEnumerable<TitleRecord> ReadTitles(Ifo ifo) =>

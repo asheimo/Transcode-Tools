@@ -14,8 +14,11 @@
 // (tools\oracle\dvdmenumap.py, class Ifo) which is proven on real
 // discs. Do not adjust one from memory: fetch the source.
 //
+// Each menu PGC's command tables (pre, post and cell commands) are
+// decoded with VmCommand. They are kept in memory for the resolver
+// and not saved on the disc record.
+//
 // Deliberately NOT here yet:
-//   - PGC command tables (pgc + 0xE4) and the VM decode  -> seam 2
 //   - the PGC chain resolver                             -> seam 3
 // ============================================================
 
@@ -67,6 +70,18 @@ public sealed class IfoMenuPgc
     public int    PrevPgc  { get; init; }
     public int    GoUpPgc  { get; init; }
     public IReadOnlyList<IfoCell> Cells { get; init; } = Array.Empty<IfoCell>();
+    public IfoCommands Commands { get; init; } = IfoCommands.Empty;
+}
+
+// A PGC's command table (pgc_command_tbl_t): pre commands run on entry,
+// post commands on exit, cell commands when a cell names one.
+public sealed class IfoCommands
+{
+    public static readonly IfoCommands Empty = new();
+
+    public IReadOnlyList<VmCommand> Pre  { get; init; } = Array.Empty<VmCommand>();
+    public IReadOnlyList<VmCommand> Post { get; init; } = Array.Empty<VmCommand>();
+    public IReadOnlyList<VmCommand> Cell { get; init; } = Array.Empty<VmCommand>();
 }
 
 public sealed class Ifo
@@ -194,10 +209,47 @@ public sealed class Ifo
                     PrevPgc   = U16(pgc + 0x9E),
                     GoUpPgc   = U16(pgc + 0xA0),
                     Cells     = Cells(pgc),
+                    Commands  = Commands(pgc),
                 });
             }
         }
         return pgcs;
+    }
+
+    // pgc_command_tbl_t (libdvdread ifo_types.h): nr_pre, nr_post,
+    // nr_cell, last_byte, then the 8-byte commands in that order. A table
+    // that does not fit inside its own last_byte, or claims more than the
+    // spec's 128 commands, is treated as absent, as the oracle does.
+    private IfoCommands Commands(long pgc)
+    {
+        int off = U16(pgc + 0xE4);
+        if (off == 0) return IfoCommands.Empty;
+
+        long tbl   = pgc + off;
+        int  nPre  = U16(tbl);
+        int  nPost = U16(tbl + 2);
+        int  nCell = U16(tbl + 4);
+        int  last  = U16(tbl + 6);
+        int  total = nPre + nPost + nCell;
+        if (total == 0 || total > 128 || 8 + total * 8 > last + 1) return IfoCommands.Empty;
+
+        int k = 0;
+        List<VmCommand> Read(int count)
+        {
+            var list = new List<VmCommand>(count);
+            for (int i = 0; i < count; i++, k++)
+            {
+                long o = tbl + 8 + k * 8;
+                Require(o, 8);
+                list.Add(VmCommand.Decode(new ReadOnlySpan<byte>(_data, (int)o, 8)));
+            }
+            return list;
+        }
+
+        var pre  = Read(nPre);
+        var post = Read(nPost);
+        var cell = Read(nCell);
+        return new IfoCommands { Pre = pre, Post = post, Cell = cell };
     }
 
     private IReadOnlyList<IfoCell> Cells(long pgc)
