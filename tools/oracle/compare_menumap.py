@@ -8,6 +8,8 @@ Compares, for the same disc:
     same first/last sectors
   - per screen: NAV pack count, and every button set: button number,
     rectangle, arrow-key neighbours, raw command bytes, command text
+  - per button: where the resolver says it leads (kind, title, chapter,
+    menu, why), with the full trace and notes
 
 The oracle stopped scanning a cell after 8,000 sectors; the app scans every
 cell in full. For a cell longer than that, the oracle's button sets must be
@@ -32,6 +34,24 @@ def load(path):
 def oracle_button(b):
     return (b["button"], tuple(b["rect"]), b["up"], b["down"], b["left"], b["right"],
             b["raw"], b["command"])
+
+
+RESOLVED_KEYS = [  # oracle key, app key
+    ("kind", "Kind"), ("title", "Title"), ("chapter", "Chapter"), ("vts", "Vts"),
+    ("vts_title", "VtsTitle"), ("chapters", "Chapters"), ("menu_pgc", "MenuPgc"),
+    ("domain", "Domain"), ("button", "Button"), ("why", "Why"),
+    ("trace", "Trace"), ("notes", "Notes"),
+]
+
+
+def oracle_resolved(b):
+    r = b.get("resolved") or {}
+    return {k: r.get(k) for k, _ in RESOLVED_KEYS if r.get(k) is not None}
+
+
+def app_resolved(b):
+    r = b.get("Resolved") or {}
+    return {k: r.get(a) for k, a in RESOLVED_KEYS if r.get(a) is not None}
 
 
 def app_button(b):
@@ -68,7 +88,7 @@ def main(argv):
     for key in sorted(set(a_screens) - set(o_screens)):
         diffs.append(f"{name(key)}: in the app, not in the oracle")
 
-    checked = capped = sets_total = buttons_total = 0
+    checked = capped = sets_total = buttons_total = resolved_total = 0
     notes = []
 
     for key in sorted(set(o_screens) & set(a_screens)):
@@ -81,6 +101,16 @@ def main(argv):
 
         o_sets = [[oracle_button(b) for b in bs["buttons"]] for bs in o["button_sets"]]
         a_sets = [[app_button(b) for b in bs["Buttons"]] for bs in a["ButtonSets"]]
+
+        # where each button leads, for the sets both sides have
+        for si, (obs, abs_) in enumerate(zip(o["button_sets"], a["ButtonSets"]), start=1):
+            for ob, ab in zip(obs["buttons"], abs_["Buttons"]):
+                resolved_total += 1
+                orr, arr = oracle_resolved(ob), app_resolved(ab)
+                if orr != arr:
+                    diffs.append(f"{name(key)} set {si} button {ob['button']} resolves differently:")
+                    diffs.append(f"    oracle {json.dumps(orr)}")
+                    diffs.append(f"    app    {json.dumps(arr)}")
         sets_total += len(o_sets)
         buttons_total += sum(len(s) for s in o_sets)
 
@@ -112,7 +142,8 @@ def main(argv):
     # -- report ---------------------------------------------------------------
     print(f"titles: oracle {len(o_titles)}, app {len(a_titles)}")
     print(f"screens compared: {checked} (oracle {len(o_screens)}, app {len(a_screens)})")
-    print(f"oracle button sets checked: {sets_total}, buttons: {buttons_total}")
+    print(f"oracle button sets checked: {sets_total}, buttons: {buttons_total}, "
+          f"resolved targets: {resolved_total}")
     if capped:
         print(f"screens past the oracle's {ORACLE_CAP}-sector limit: {capped}")
         for line in notes:

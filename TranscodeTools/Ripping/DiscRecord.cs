@@ -164,6 +164,7 @@ public sealed class ResolvedTarget
     public int?    VtsTitle { get; set; }
     public int?    Chapters { get; set; }
     public int?    MenuPgc  { get; set; }
+    public int?    Button   { get; set; }   // for "menu": the button a LinkPTT/PGN/CN highlights
     public string? Domain   { get; set; }   // for "menu": "VMGM" or "VTS n"
     public string? Why      { get; set; }   // reason for menu/loop/unresolved/resume
 

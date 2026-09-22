@@ -19,8 +19,9 @@
 // and the menu program chains with their cells) and then from each
 // menu cell's VOB sectors (seam 2: NavPacks and the button sets, each
 // button with its rectangle, arrow-key neighbours and decoded
-// command). A button's Resolved target stays empty until the PGC
-// resolver (seam 3).
+// command). Once every IFO is read, the PGC resolver (seam 3) follows
+// each button's command through the command chains and fills its
+// Resolved target.
 // ============================================================
 
 using System.ComponentModel;
@@ -157,6 +158,8 @@ public static class DiscAnalysis
 
         int read = 0;
         var problems = new List<string>();
+        var parsed   = new List<Ifo>();
+        IReadOnlyList<IfoTitle> vmgTitles = Array.Empty<IfoTitle>();
 
         foreach (var path in ifoPaths)
         {
@@ -188,6 +191,8 @@ public static class DiscAnalysis
 
                 record.Titles.AddRange(titles);
                 record.Screens.AddRange(screens);
+                if (ifo.Kind == IfoKind.Vmg) vmgTitles = ifo.Titles();
+                parsed.Add(ifo);
                 read++;
             }
             catch (IfoFormatException ex)
@@ -202,10 +207,40 @@ public static class DiscAnalysis
                     ? $"No IFO on {videoTs} could be read."
                     : $"No IFO on {videoTs} could be read: {string.Join("; ", problems)}");
 
+        // The resolver needs every IFO's menu PGCs, since a button's chain
+        // can jump between the VMG and any title set.
+        progress.Report("resolving buttons");
+        try
+        {
+            ResolveButtons(record, parsed, vmgTitles, token);
+        }
+        catch (IfoFormatException ex)
+        {
+            problems.Add($"buttons not resolved: {ex.Message}");
+        }
+
         foreach (var problem in problems)
             progress.Report($"skipped: {problem}");
 
         return record;
+    }
+
+    // Fills each button's Resolved target. The command is decoded again from
+    // its saved raw bytes, which gives the same result the scan had.
+    private static void ResolveButtons(
+        DiscRecord record, List<Ifo> ifos, IReadOnlyList<IfoTitle> titles, CancellationToken token)
+    {
+        var resolver = new Resolver(ifos, titles);
+        foreach (var screen in record.Screens)
+        {
+            token.ThrowIfCancellationRequested();
+            var domain = Resolver.DomainKey(screen.Ifo);
+            foreach (var set in screen.ButtonSets)
+                foreach (var button in set.Buttons)
+                    button.Resolved = resolver.Resolve(
+                        domain, screen.Lang, screen.Pgc,
+                        VmCommand.Decode(Convert.FromHexString(button.Raw)));
+        }
     }
 
     // Fills NavPacks and ButtonSets on each screen from its cell's sectors
