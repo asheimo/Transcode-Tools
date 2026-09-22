@@ -118,6 +118,25 @@ public sealed class MenuVob : IDisposable
         return new CellScan(sets, navs, null);
     }
 
+    // Copies `count` sectors starting at `first` into `destination`, stopping
+    // early at the end of the file. Used to cut a menu cell out for ffmpeg.
+    public void CopySectors(long first, long count, Stream destination)
+    {
+        count = Math.Min(count, Sectors - first);
+        if (count <= 0) return;
+
+        var buffer = new byte[NavPack.SectorSize * 64];
+        _file.Seek(first * NavPack.SectorSize, SeekOrigin.Begin);
+        long remaining = count * NavPack.SectorSize;
+        while (remaining > 0)
+        {
+            int want = (int)Math.Min(buffer.Length, remaining);
+            _file.ReadExactly(buffer, 0, want);
+            destination.Write(buffer, 0, want);
+            remaining -= want;
+        }
+    }
+
     private static string SetKey(IReadOnlyList<NavButton> buttons)
     {
         var key = new StringBuilder();

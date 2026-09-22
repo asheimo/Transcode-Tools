@@ -10,11 +10,16 @@ Compares, for the same disc:
     rectangle, arrow-key neighbours, raw command bytes, command text
   - per button: where the resolver says it leads (kind, title, chapter,
     menu, why), with the full trace and notes
+  - per screen: whether it got a picture, and the picture's file name
+  - per title: which buttons name it (IFO, PGC, button) and which PGC
+    commands jump to it
 
-The oracle stopped scanning a cell after 8,000 sectors; the app scans every
-cell in full. For a cell longer than that, the oracle's button sets must be
-the first sets the app found, and the app's NAV pack count must be at least
-the oracle's; anything the app found beyond them is listed, not failed.
+The menumap.json being compared against was made by the old Python run,
+which only read the first 8,000 sectors of each cell. The app reads every
+cell in full, so for a cell longer than that the app's NAV pack count is
+higher. There the oracle's button sets must be the first sets the app found;
+anything extra the app found is printed, not failed. The note is only
+printed when something extra turns up.
 
 Prints one line per difference and a summary. Exit code 0 when everything
 matches, 1 otherwise.
@@ -88,13 +93,17 @@ def main(argv):
     for key in sorted(set(a_screens) - set(o_screens)):
         diffs.append(f"{name(key)}: in the app, not in the oracle")
 
-    checked = capped = sets_total = buttons_total = resolved_total = 0
+    checked = capped = sets_total = buttons_total = resolved_total = pictures = 0
     notes = []
 
     for key in sorted(set(o_screens) & set(a_screens)):
         o, a = o_screens[key], a_screens[key]
         checked += 1
         first, last = o["sectors"]
+        if o.get("image") != a.get("Image"):
+            diffs.append(f"{name(key)}: picture oracle {o.get('image')}, app {a.get('Image')}")
+        if o.get("image"):
+            pictures += 1
         if (first, last) != (a["FirstSector"], a["LastSector"]):
             diffs.append(f"{name(key)}: sectors oracle {first}-{last}, "
                          f"app {a['FirstSector']}-{a['LastSector']}")
@@ -124,10 +133,10 @@ def main(argv):
                              f"the first sets the app found")
                 diffs.extend(set_diffs(key, o_sets, a_sets[:len(o_sets)]))
             extra = len(a_sets) - len(o_sets)
-            notes.append(f"{name(key)}: {last - first + 1} sectors, longer than the oracle's "
-                         f"{ORACLE_CAP}-sector limit. NAV packs oracle {o['nav_packs']}, app "
-                         f"{a['NavPacks']}. Button sets past the old limit: "
-                         f"{extra if extra > 0 else 'none'}.")
+            if extra > 0:
+                notes.append(f"{name(key)}: the app found {extra} button set(s) the old "
+                             f"Python run missed, because that run only read this cell's "
+                             f"first {ORACLE_CAP} sectors:")
             for i, s in enumerate(a_sets[len(o_sets):], start=len(o_sets) + 1):
                 notes.append(f"    extra set {i}:")
                 for b in s:
@@ -139,15 +148,30 @@ def main(argv):
         if o_sets != a_sets:
             diffs.extend(set_diffs(key, o_sets, a_sets))
 
+    # -- title coverage -------------------------------------------------------
+    a_by_number = {t["Number"]: t for t in app["Titles"]}
+    covered = 0
+    for c in oracle.get("coverage") or []:
+        t = a_by_number.get(c["title"])
+        if t is None:
+            continue
+        covered += 1
+        o_named = [(n["ifo"], n["pgc"], n["button"]) for n in c["named_by"]]
+        a_named = [(n["Ifo"], n["Pgc"], n["Button"]) for n in t.get("NamedBy") or []]
+        if o_named != a_named:
+            diffs.append(f"title {c['title']} named by: oracle {o_named}, app {a_named}")
+        if list(c["reached_from"]) != list(t.get("ReachedFrom") or []):
+            diffs.append(f"title {c['title']} reached from: oracle {c['reached_from']}, "
+                         f"app {t.get('ReachedFrom')}")
+
     # -- report ---------------------------------------------------------------
     print(f"titles: oracle {len(o_titles)}, app {len(a_titles)}")
     print(f"screens compared: {checked} (oracle {len(o_screens)}, app {len(a_screens)})")
     print(f"oracle button sets checked: {sets_total}, buttons: {buttons_total}, "
           f"resolved targets: {resolved_total}")
-    if capped:
-        print(f"screens past the oracle's {ORACLE_CAP}-sector limit: {capped}")
-        for line in notes:
-            print(line)
+    print(f"screens with a picture in the oracle: {pictures}; titles with coverage checked: {covered}")
+    for line in notes:
+        print(line)
     print()
     if diffs:
         print(f"DIFFERENCES: {len(diffs)}")

@@ -607,7 +607,11 @@ public partial class RipView : UserControl
 
             var record = await Task.Run(() =>
             {
-                var disc = DiscAnalysis.ReadDisc(job.Disc, mount.VolumePath, progress, job.Token);
+                var disc = DiscAnalysis.ReadDisc(
+                    job.Disc, mount.VolumePath,
+                    DiscStore.DiscFolder(job.Destination, job.Disc),
+                    AppSettings.Instance.FFmpeg_Path,
+                    progress, job.Token);
 
                 // The volume path means nothing once the ISO is unmounted;
                 // the record names the ISO it was read from instead.

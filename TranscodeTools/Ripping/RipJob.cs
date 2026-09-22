@@ -21,7 +21,9 @@
 // button with its rectangle, arrow-key neighbours and decoded
 // command). Once every IFO is read, the PGC resolver (seam 3) follows
 // each button's command through the command chains and fills its
-// Resolved target.
+// Resolved target; each title then gets NamedBy (the buttons that
+// lead to it) and ReachedFrom (the PGC commands that jump to it), and
+// each screen worth showing gets a picture (seam 4, MenuFrames).
 // ============================================================
 
 using System.ComponentModel;
@@ -141,6 +143,8 @@ public static class DiscAnalysis
     public static DiscRecord ReadDisc(
         string discName,
         string sourcePath,
+        string menuFolder,
+        string ffmpegPath,
         IProgress<string> progress,
         CancellationToken token)
     {
@@ -218,6 +222,17 @@ public static class DiscAnalysis
         {
             problems.Add($"buttons not resolved: {ex.Message}");
         }
+
+        try
+        {
+            TitleCoverage.Apply(record, parsed.Select(i => (i.FileName, i.MenuPgcs())));
+        }
+        catch (IfoFormatException ex)
+        {
+            problems.Add($"title coverage not worked out: {ex.Message}");
+        }
+
+        MenuFrames.Extract(record, videoTs, menuFolder, ffmpegPath, progress, problems, token);
 
         foreach (var problem in problems)
             progress.Report($"skipped: {problem}");
