@@ -4,7 +4,11 @@
 // One row in the jobs list, and the work behind it.
 //
 // A row is added when a disc's backup completes, and waits with a
-// Start button until the IFO read is started from it.
+// Start button until the IFO read is started from it. The read uses
+// the backup ISO, so Drive is only where the disc was backed up from.
+// The jobs list is also rebuilt from disk when a Destination loads
+// (see RipView.RebuildJobs), and every row keeps Start so a read can
+// be run again.
 //
 // A job outlives the drive it started from, which is why it is its
 // own object rather than state on the drive row. It runs off the UI
@@ -84,17 +88,14 @@ public sealed class RipJob : INotifyPropertyChanged
             OnPropertyChanged();
             OnPropertyChanged(nameof(IsRunning));
             OnPropertyChanged(nameof(ActionText));
-            OnPropertyChanged(nameof(ActionVisibility));
         }
     }
 
     public bool IsRunning => State == JobState.Running;
 
-    // The row's button: Start while ready, Cancel while running. A
-    // finished row leaves the cell empty rather than showing a dead
-    // button, since FlatButton has no disabled look.
-    public string     ActionText       => State == JobState.Running ? "Cancel" : "Start";
-    public Visibility ActionVisibility => State == JobState.Finished ? Visibility.Collapsed : Visibility.Visible;
+    // The row's button: Cancel while running, Start otherwise. A finished
+    // row keeps Start so its read can be run again.
+    public string ActionText => State == JobState.Running ? "Cancel" : "Start";
 
     public CancellationToken Token => _cancel?.Token ?? CancellationToken.None;
 

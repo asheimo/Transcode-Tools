@@ -14,10 +14,13 @@
 // red). Nothing appears in the jobs list until a backup completes.
 //
 // A completed backup adds a row to the jobs list with a Start
-// button. Start runs the disc read: the IFO parse (port seam 1) off
-// the optical drive on a background thread, saved as the disc's
-// record. The rest of the engine joins the same job as each seam
-// lands.
+// button. Start runs the disc read from the backup ISO, not the
+// drive: the ISO is mounted with no drive letter (IsoMount), the
+// IFO parse (port seam 1) runs on a background thread, the record
+// is saved, and the ISO is unmounted. The disc is not needed after
+// its backup, so Eject is safe at any time. The ISO's IFOs were
+// measured byte-identical to the disc's. The rest of the engine
+// joins the same job as each seam lands.
 // ============================================================
 
 using System.Collections.ObjectModel;
@@ -64,9 +67,10 @@ public partial class RipView : UserControl
     // being repopulated from code (same pattern as the Input/Output boxes).
     private bool _suppressDestinationSelection;
 
-    // Drive letters with an IFO read running on them. A backup or an
-    // eject on that drive waits for the read, which takes under a second.
-    private readonly HashSet<string> _busyDrives = new(StringComparer.OrdinalIgnoreCase);
+    // ISOs with a job reading them. A second job on the same ISO waits
+    // its turn: both would share one mount, and the first to finish
+    // would unmount it under the other.
+    private readonly HashSet<string> _busyIsos = new(StringComparer.OrdinalIgnoreCase);
 
     private const string NoTitleSelectedText =
         "Select a disc title to see the menu screen it was named from.";
@@ -139,6 +143,7 @@ public partial class RipView : UserControl
 
         _destination = folder;
         LoadDiscs();
+        RebuildJobs();
     }
 
     // Repopulates the dropdown from saved history. Text is set inside the
@@ -285,12 +290,6 @@ public partial class RipView : UserControl
             return;
         }
 
-        if (_busyDrives.Contains(drive.Letter))
-        {
-            StatusText.Text = $"{drive.Letter} is being read. Back it up once the read finishes.";
-            return;
-        }
-
         // The disc's name is its volume label: it names the ISO, the rip
         // folder and the log, so a label that cannot be a file name has to
         // stop here rather than half way through.
@@ -346,7 +345,7 @@ public partial class RipView : UserControl
                 makeMkv, drive.Letter, name, isoPath, logPath, progress, drive.BackupToken));
 
             drive.FinishBackup(DriveState.Done);
-            Jobs.Add(new RipJob(name, drive.Letter, destination));
+            AddOrResetJob(name, drive.Letter, destination);
             StatusText.Text = $"{name} backed up to {isoPath}.";
         }
         catch (OperationCanceledException)
@@ -379,12 +378,6 @@ public partial class RipView : UserControl
 
     private async Task EjectAsync(OpticalDriveRow drive)
     {
-        if (_busyDrives.Contains(drive.Letter))
-        {
-            StatusText.Text = $"{drive.Letter} is being read. Eject it once the read finishes.";
-            return;
-        }
-
         try
         {
             await Task.Run(() => OpticalDrive.Eject(drive.Letter));
@@ -408,45 +401,107 @@ public partial class RipView : UserControl
 
         if (job.IsRunning)
             job.Cancel();
-        else if (job.State == JobState.Ready)
+        else
             await RunAnalysisAsync(job);
     }
 
-    // The IFO read, off the optical drive. The disc must still be the
-    // one that was backed up: a disc ejected or swapped since is said
-    // so, and the row stays ready for when it is back.
+    // Rebuilds the jobs list from what is on disk under the Destination:
+    // one row per disc whose backup log ends "Backup complete" and whose
+    // ISO is still in ISO\. A disc with a record shows its counts; one
+    // without shows "ready". Running jobs are left alone, since they are
+    // real work in progress; every other row is rebuilt.
+    private void RebuildJobs()
+    {
+        foreach (var job in Jobs.Where(j => !j.IsRunning).ToList())
+            Jobs.Remove(job);
+
+        var problems = new List<string>();
+        foreach (var log in DiscStore.ReadBackupLogs(_destination, problems))
+        {
+            if (!log.Completed) continue;
+            if (!File.Exists(DiscStore.IsoPath(_destination, log.DiscName))) continue;
+            if (FindJob(log.DiscName, _destination) != null) continue;   // running
+
+            var job    = new RipJob(log.DiscName, log.Drive, _destination);
+            var record = Discs.FirstOrDefault(d => d.Name.Equals(log.DiscName, StringComparison.OrdinalIgnoreCase));
+            if (record != null)
+                job.Status = RecordCounts(record);
+            Jobs.Add(job);
+        }
+
+        if (problems.Count > 0)
+        {
+            StatusText.Text    = $"{StatusText.Text} Could not read {problems.Count} backup log(s): {string.Join("; ", problems)}";
+            StatusText.ToolTip = string.Join("\n", problems);
+        }
+    }
+
+    // A backup of a disc that already has a row resets that row rather
+    // than adding a second one for the same ISO.
+    private void AddOrResetJob(string disc, string drive, string destination)
+    {
+        var existing = FindJob(disc, destination);
+        if (existing != null && !existing.IsRunning)
+            Jobs.Remove(existing);
+        Jobs.Add(new RipJob(disc, drive, destination));
+    }
+
+    private RipJob? FindJob(string disc, string destination) =>
+        Jobs.FirstOrDefault(j =>
+            j.Disc.Equals(disc, StringComparison.OrdinalIgnoreCase) &&
+            j.Destination.Equals(destination, StringComparison.OrdinalIgnoreCase));
+
+    private static string RecordCounts(DiscRecord record) =>
+        $"{Count(record.Titles.Count, "title")}, {Count(record.Screens.Count, "screen")}";
+
+    // The IFO read, from the disc's backup ISO. The ISO is mounted with
+    // no drive letter, read through its volume path, and unmounted again
+    // whether the read succeeds, fails or is cancelled. A missing ISO is
+    // said so, and the row stays ready for when it is back.
     private async Task RunAnalysisAsync(RipJob job)
     {
-        if (_busyDrives.Contains(job.Drive))
+        var isoPath = DiscStore.IsoPath(job.Destination, job.Disc);
+
+        if (_busyIsos.Contains(isoPath))
         {
-            job.Status = $"{job.Drive} is already being read.";
+            job.Status = $"{job.Disc} is already being read.";
             return;
         }
-        if (!DiscIsIn(job.Drive, job.Disc))
+        if (!File.Exists(isoPath))
         {
-            job.Status = $"{job.Disc} is not in {job.Drive}.";
+            job.Status = $"{isoPath} was not found.";
             return;
         }
 
         job.Begin();
-        job.Status = "starting";
-        _busyDrives.Add(job.Drive);
+        _busyIsos.Add(isoPath);
 
         // Progress is created here, on the UI thread, so its callbacks
         // come back to the UI thread and can touch the job's bindings.
         var progress = new Progress<string>(message => job.Status = message);
-        var source   = job.Drive + System.IO.Path.DirectorySeparatorChar;
+        IsoMount? mount = null;
 
         try
         {
+            // The mount is not cancelled part way: stopping PowerShell in
+            // the middle could leave the image mounted. Cancel takes effect
+            // as soon as the mount returns.
+            job.Status = "mounting ISO";
+            mount = await IsoMount.MountAsync(isoPath);
+            job.Token.ThrowIfCancellationRequested();
+
             var record = await Task.Run(() =>
             {
-                var disc = DiscAnalysis.ReadDisc(job.Disc, source, progress, job.Token);
+                var disc = DiscAnalysis.ReadDisc(job.Disc, mount.VolumePath, progress, job.Token);
+
+                // The volume path means nothing once the ISO is unmounted;
+                // the record names the ISO it was read from instead.
+                disc.SourcePath = isoPath;
                 DiscStore.Save(job.Destination, disc);
                 return disc;
             }, job.Token);
 
-            job.Finish($"{Count(record.Titles.Count, "title")}, {Count(record.Screens.Count, "screen")}", false);
+            job.Finish(RecordCounts(record), false);
             if (job.Destination.Equals(_destination, StringComparison.OrdinalIgnoreCase))
                 LoadDiscs();
         }
@@ -462,20 +517,21 @@ public partial class RipView : UserControl
         }
         finally
         {
-            _busyDrives.Remove(job.Drive);
-        }
-    }
-
-    private static bool DiscIsIn(string letter, string discName)
-    {
-        try
-        {
-            var drive = new DriveInfo(letter);
-            return drive.IsReady && drive.VolumeLabel.Equals(discName, StringComparison.OrdinalIgnoreCase);
-        }
-        catch (Exception ex) when (ex is IOException or ArgumentException or UnauthorizedAccessException)
-        {
-            return false;
+            if (mount?.Ours == true)
+            {
+                try
+                {
+                    await IsoMount.DismountAsync(isoPath);
+                }
+                catch (IsoMountException ex)
+                {
+                    // The read's own result stays on the row; the unmount
+                    // problem goes to the status line so neither hides the
+                    // other.
+                    StatusText.Text = $"{job.Disc}: the ISO could not be unmounted: {ex.Message}";
+                }
+            }
+            _busyIsos.Remove(isoPath);
         }
     }
 

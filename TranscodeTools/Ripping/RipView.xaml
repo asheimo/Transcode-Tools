@@ -214,8 +214,9 @@
                           Background="Transparent"
                           Template="{StaticResource GripSplitter}"/>
 
-            <!-- Jobs: one row per backed-up disc. Start runs the IFO read,
-                 Cancel stops it, and a finished row keeps its result. -->
+            <!-- Jobs: one row per backed-up disc, rebuilt from disk when a
+                 Destination loads. Start runs the IFO read and stays on the
+                 row so it can be run again; Cancel stops a running read. -->
             <ListView Grid.Column="2"
                       x:Name="JobList"
                       ItemContainerStyle="{StaticResource JobRowStyle}"
@@ -241,7 +242,6 @@
                                     <Button Content="{Binding ActionText}"
                                             Style="{StaticResource FlatButton}"
                                             Padding="12,2"
-                                            Visibility="{Binding ActionVisibility}"
                                             Click="JobAction_Click"/>
                                 </DataTemplate>
                             </GridViewColumn.CellTemplate>

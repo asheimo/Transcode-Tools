@@ -61,6 +61,41 @@ public static class DiscStore
     public static string BackupLogPath(string destination, string discName) =>
         Path.Combine(BackupLogFolder(destination), discName + ".log");
 
+    // ── Backup logs ──────────────────────────────────────────────────
+    // A backup log is the record that a disc was backed up: BackupJob
+    // writes a header with the drive, and ends the log with one of
+    // "Backup complete: ...", "Failed: ..." or "Cancelled."
+
+    public sealed record BackupLogSummary(string DiscName, string Drive, bool Completed);
+
+    // Reads every backup log under <Destination>\Logs\Backup\. A log that
+    // can't be read is reported in `problems`, not skipped silently.
+    public static List<BackupLogSummary> ReadBackupLogs(string destination, List<string> problems)
+    {
+        var logs   = new List<BackupLogSummary>();
+        var folder = BackupLogFolder(destination);
+        if (!Directory.Exists(folder)) return logs;
+
+        foreach (var path in Directory.GetFiles(folder, "*.log").OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var lines = File.ReadAllLines(path);
+                var drive = lines.FirstOrDefault(l => l.StartsWith("Drive:", StringComparison.Ordinal))?["Drive:".Length..].Trim() ?? "";
+                var last  = lines.LastOrDefault(l => l.Trim().Length > 0) ?? "";
+                logs.Add(new BackupLogSummary(
+                    Path.GetFileNameWithoutExtension(path),
+                    drive,
+                    last.StartsWith("Backup complete", StringComparison.Ordinal)));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                problems.Add($"{Path.GetFileName(path)}: {ex.Message}");
+            }
+        }
+        return logs;
+    }
+
     // ── Records ──────────────────────────────────────────────────────
 
     // Reads every disc record under <Destination>\Rip\, sorted by name.
