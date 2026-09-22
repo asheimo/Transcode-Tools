@@ -134,6 +134,15 @@ public static class DiscStore
         return discs;
     }
 
+    // Deletes a disc's record, for a disc being backed up again: a new
+    // backup means everything after it is redone. Only disc.json goes;
+    // anything else in Menu\ and the rips in Rip\<DISC>\ are left.
+    public static void DeleteRecord(string destination, string discName)
+    {
+        var path = Path.Combine(DiscFolder(destination, discName), RecordFileName);
+        if (File.Exists(path)) File.Delete(path);
+    }
+
     // Writes the record to a temporary file first, then swaps it into
     // place, so a crash mid-write never leaves a half-written disc.json.
     public static void Save(string destination, DiscRecord disc)

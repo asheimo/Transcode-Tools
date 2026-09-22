@@ -13,6 +13,10 @@
 // progress), then Eject on success or Log on failure (the row turns
 // red). Nothing appears in the jobs list until a backup completes.
 //
+// Clicking Backup checks disk space first (DiskSpace): too little and
+// a message box refuses it. A running backup holds its space in a
+// reserve file that shrinks as the ISO grows.
+//
 // A completed backup adds a row to the jobs list with a Start
 // button. Start runs the disc read from the backup ISO, not the
 // drive: the ISO is mounted with no drive letter (IsoMount), the
@@ -142,6 +146,11 @@ public partial class RipView : UserControl
         RefreshDestinationHistory(folder);
 
         _destination = folder;
+
+        // Reserve files left by a power cut; ones a running backup holds
+        // refuse deletion and stay.
+        DiskSpace.SweepReserve(folder);
+
         LoadDiscs();
         RebuildJobs();
     }
@@ -304,8 +313,18 @@ public partial class RipView : UserControl
         var isoPath     = DiscStore.IsoPath(destination, name);
         var logPath     = DiscStore.BackupLogPath(destination, name);
 
+        // A new backup redoes everything after it, and a running read of
+        // this disc would have its ISO pulled out from under it.
+        if (FindJob(name, destination) is { IsRunning: true })
+        {
+            StatusText.Text = $"{name} is being read. Back it up again once the read finishes.";
+            return;
+        }
+
         // A disc seen before: asked on what is actually on disk. No stops
-        // and nothing is deleted.
+        // and nothing is deleted. Yes to Overwrite deletes the old ISO only
+        // after the space check below has passed.
+        bool overwrite = false;
         if (File.Exists(isoPath))
         {
             if (!Confirm($"{name} already exists. Overwrite?"))
@@ -313,15 +332,7 @@ public partial class RipView : UserControl
                 StatusText.Text = $"{name} left as it was.";
                 return;
             }
-            try
-            {
-                File.Delete(isoPath);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                StatusText.Text = $"{name}: the existing ISO could not be removed: {ex.Message}";
-                return;
-            }
+            overwrite = true;
         }
         else if (File.Exists(logPath))
         {
@@ -332,12 +343,91 @@ public partial class RipView : UserControl
             }
         }
 
+        // Space: the disc's reported size x ReservationFactor must fit in
+        // free space now. An ISO about to be overwritten counts as free.
+        // Running backups need no adding up: their space is held on disk
+        // by their reserve files, so free space already excludes it.
+        long needed, free;
+        try
+        {
+            needed = DiskSpace.ReservationFor(new DriveInfo(drive.Letter).TotalSize);
+            free   = DiskSpace.FreeBytes(destination);
+            if (overwrite) free += new FileInfo(isoPath).Length;
+        }
+        catch (Exception ex) when (ex is IOException or Win32Exception or UnauthorizedAccessException)
+        {
+            StatusText.Text = $"{name}: disk space could not be checked: {ex.Message}";
+            return;
+        }
+
+        if (free < needed)
+        {
+            MessageBox.Show(
+                "Insufficient Disk Space Available",
+                "Insufficient Disk Space",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+
+        if (overwrite)
+        {
+            try
+            {
+                File.Delete(isoPath);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                StatusText.Text = $"{name}: the existing ISO could not be removed: {ex.Message}";
+                return;
+            }
+        }
+
+        // A backup of a disc seen before redoes everything after it: its row
+        // leaves the jobs list and its record is deleted now, so neither
+        // shows the previous run's results while the new backup runs. A
+        // row comes back, ready, when the new backup completes.
+        if (FindJob(name, destination) is { } oldJob)
+            Jobs.Remove(oldJob);
+        try
+        {
+            DiscStore.DeleteRecord(destination, name);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            StatusText.Text = $"{name}: the old record could not be deleted: {ex.Message}";
+            return;
+        }
+        if (destination.Equals(_destination, StringComparison.OrdinalIgnoreCase) &&
+            Discs.FirstOrDefault(d => d.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) is { } oldDisc)
+        {
+            if (ReferenceEquals(_selectedDisc, oldDisc)) ShowDiscList();
+            Discs.Remove(oldDisc);
+        }
+
+        // Claim the space before anything else can: clicks are handled one
+        // at a time on this thread, so the next click's check already sees
+        // this reservation gone from free space.
+        SpaceReservation reservation;
+        try
+        {
+            reservation = SpaceReservation.Create(destination, name, needed);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            StatusText.Text = $"{name}: space could not be reserved: {ex.Message}";
+            return;
+        }
+
         drive.BeginBackup(name, logPath);
         StatusText.Text = $"Backing up {name} from {drive.Letter}.";
 
         // Progress is created here, on the UI thread, so its callbacks
         // come back to the UI thread and can touch the row's bindings.
         var progress = new Progress<double>(fraction => drive.Progress = fraction);
+
+        using var shrinkStop = new CancellationTokenSource();
+        var shrinking = ShrinkWhileRunningAsync(reservation, isoPath, shrinkStop.Token);
 
         try
         {
@@ -359,6 +449,31 @@ public partial class RipView : UserControl
             // message rather than a house one that hides it.
             drive.FinishBackup(DriveState.Failed);
             StatusText.Text = $"{name} backup failed: {ex.Message}";
+        }
+        finally
+        {
+            // Success, failure or cancel: stop shrinking and close the
+            // reserve file, which deletes it and frees what it still held.
+            shrinkStop.Cancel();
+            try { await shrinking; } catch (OperationCanceledException) { }
+            reservation.Dispose();
+        }
+    }
+
+    // Every couple of seconds, hands back reserved space equal to what the
+    // ISO has grown to. A tick that can't read the ISO or resize the
+    // reserve is skipped; the next one tries again.
+    private static async Task ShrinkWhileRunningAsync(SpaceReservation reservation, string isoPath, CancellationToken token)
+    {
+        while (true)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(2), token);
+            try
+            {
+                var iso = new FileInfo(isoPath);
+                if (iso.Exists) reservation.Shrink(iso.Length);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }
     }
 
