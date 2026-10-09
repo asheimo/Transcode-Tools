@@ -3,6 +3,7 @@
 ## Process Rules
 
 - Ask for fresh solution zip at the start of every session — never assume the container matches the repo
+- Read the solution's code in its entirety before work begins
 - Read the reference doc in full at the start of every session before touching any code — this is why it exists
 - Before packaging: grep entire solution, explain changes clearly, ask questions, package only on explicit approval
 - Present summary of changes BEFORE asking to package — not after
@@ -13,6 +14,7 @@
 - When fixing Aero2 theming: always fetch actual template from VS2022 `DesignTools/SystemThemes/wpf/Aero2.NormalColor.xaml` — never guess at brush key names
 - Andy is learning — explain the why behind every decision, not just the what
 - For scripts that will be executed in a shell (bash, PowerShell, cmd), grep for non-ASCII characters before delivering. Windows consoles read UTF-8 files as Windows-1252 and em-dashes / smart quotes inside strings cause parse errors.
+- Commit only after changes are tested and working; don't suggest committing before then
 
 ## Technical Rules
 
