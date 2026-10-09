@@ -61,6 +61,12 @@ public static class DiscStore
     public static string BackupLogPath(string destination, string discName) =>
         Path.Combine(BackupLogFolder(destination), discName + ".log");
 
+    // One log per stage of one run: Logs\<timestamp>\<DISC>\info.log and
+    // so on. The timestamp is the run's start, in the same form the
+    // Remux/Transcode logs use, so one run's stages share a folder.
+    public static string StageLogPath(string destination, DateTime runStarted, string discName, string logFileName) =>
+        Path.Combine(destination, LogsFolderName, runStarted.ToString("yyyyMMdd_HHmmss"), discName, logFileName);
+
     // ── Backup logs ──────────────────────────────────────────────────
     // A backup log is the record that a disc was backed up: BackupJob
     // writes a header with the drive, and ends the log with one of

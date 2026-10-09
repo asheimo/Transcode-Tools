@@ -1,6 +1,6 @@
 """compare_menumap.py - check the app's disc.json against the oracle's menumap.json.
 
-    python compare_menumap.py <menumap.json> <disc.json>
+    python compare_menumap.py <menumap.json> <disc.json> [titles.txt]
 
 Compares, for the same disc:
   - titles: number, VTS, VTS title, angles, chapters
@@ -13,6 +13,12 @@ Compares, for the same disc:
   - per screen: whether it got a picture, and the picture's file name
   - per title: which buttons name it (IFO, PGC, button) and which PGC
     commands jump to it
+  - with titles.txt (the `makemkvcon -r --minlength=0 info` output the oracle
+    read): per title, MakeMKV's duration, seconds, size on the disc, segments
+    and the rip's file name, read with the oracle's own parse_makemkv_info;
+    then the oracle's join_titles over the same titles.txt and the .mkv files
+    in the disc's rip folder (the folder that holds Menu): the chapter
+    gate, play-all, and which titles are bound to which file
 
 The menumap.json being compared against was made by the old Python run,
 which only read the first 8,000 sectors of each cell. The app reads every
@@ -26,7 +32,12 @@ matches, 1 otherwise.
 """
 
 import json
+import os
 import sys
+
+# The oracle sits beside this script; its parser reads titles.txt.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from dvdmenumap import join_titles, parse_makemkv_info, scan_rip_folder  # noqa: E402
 
 ORACLE_CAP = 8000
 
@@ -65,7 +76,7 @@ def app_button(b):
 
 
 def main(argv):
-    if len(argv) != 3:
+    if len(argv) not in (3, 4):
         print(__doc__)
         return 2
 
@@ -164,12 +175,60 @@ def main(argv):
             diffs.append(f"title {c['title']} reached from: oracle {c['reached_from']}, "
                          f"app {t.get('ReachedFrom')}")
 
+    # -- MakeMKV info ---------------------------------------------------------
+    info_checked = None
+    if len(argv) == 4:
+        mkv = parse_makemkv_info(argv[3])["titles"]
+        info_checked = 0
+        for number, o in sorted(mkv.items()):
+            t = a_by_number.get(number)
+            if t is None:
+                diffs.append(f"title {number}: in titles.txt, missing from the app")
+                continue
+            info_checked += 1
+            pairs = [("duration", o["duration"], t.get("Duration")),
+                     ("seconds", o["seconds"], t.get("Seconds")),
+                     ("bytes", o["bytes"], t.get("SourceBytes")),
+                     ("segments", o["segments"], t.get("Segments")),
+                     ("file", o["file"], t.get("RipName"))]
+            for field, ov, av in pairs:
+                if ov != av:
+                    diffs.append(f"title {number} {field}: titles.txt {ov!r}, app {av!r}")
+        for number in sorted(set(a_by_number) - set(mkv)):
+            if a_by_number[number].get("RipName") is not None:
+                diffs.append(f"title {number}: the app has MakeMKV info, titles.txt has none")
+
+        # -- binding ----------------------------------------------------------
+        rip_folder = os.path.dirname(os.path.dirname(os.path.abspath(argv[2])))
+        rip_files = scan_rip_folder(rip_folder)
+        rows = join_titles({"titles": oracle["titles"]}, {"titles": mkv},
+                           rip_files if rip_files else None)
+        bind_checked = 0
+        for number, r in sorted(rows.items()):
+            t = a_by_number.get(number)
+            if t is None or "verified" not in r:
+                continue
+            bind_checked += 1
+            pairs = [("verified", r["verified"], t.get("Verified")),
+                     ("play-all of", r.get("composite_of", []), t.get("CompositeOf") or [])]
+            if rip_files:
+                pairs.append(("bound", r.get("bound", False), t.get("Bound")))
+                if r.get("bound"):
+                    pairs.append(("file", r["file"], t.get("FileName")))
+            for field, ov, av in pairs:
+                if ov != av:
+                    diffs.append(f"title {number} {field}: oracle {ov!r}, app {av!r}")
+
     # -- report ---------------------------------------------------------------
     print(f"titles: oracle {len(o_titles)}, app {len(a_titles)}")
     print(f"screens compared: {checked} (oracle {len(o_screens)}, app {len(a_screens)})")
     print(f"oracle button sets checked: {sets_total}, buttons: {buttons_total}, "
           f"resolved targets: {resolved_total}")
     print(f"screens with a picture in the oracle: {pictures}; titles with coverage checked: {covered}")
+    if info_checked is not None:
+        print(f"titles with MakeMKV info checked: {info_checked}")
+        print(f"titles with binding checked: {bind_checked} "
+              f"({len(rip_files)} .mkv file(s) in {rip_folder})")
     for line in notes:
         print(line)
     print()

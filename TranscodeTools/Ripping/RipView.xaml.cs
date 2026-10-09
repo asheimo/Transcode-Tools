@@ -18,13 +18,15 @@
 // reserve file that shrinks as the ISO grows.
 //
 // A completed backup adds a row to the jobs list with a Start
-// button. Start runs the disc read from the backup ISO, not the
-// drive: the ISO is mounted with no drive letter (IsoMount), the
-// IFO parse (port seam 1) runs on a background thread, the record
-// is saved, and the ISO is unmounted. The disc is not needed after
-// its backup, so Eject is safe at any time. The ISO's IFOs were
-// measured byte-identical to the disc's. The rest of the engine
-// joins the same job as each seam lands.
+// button. Start runs three stages from the backup ISO, not the drive:
+// Analyse (the ISO is mounted with no drive letter by IsoMount, the
+// IFOs and menus are read on a background thread, the ISO is
+// unmounted), Info (`makemkvcon info` on the ISO file, MakeMkvInfo)
+// and Rip (`makemkvcon mkv` into Rip\<DISC>\, then RipBinder ties each
+// title to its file, MakeMkvRip). The record is saved after each. The disc is not needed after its
+// backup, so Eject is safe at any time. The ISO's IFOs were measured
+// byte-identical to the disc's. The rest of the engine joins the
+// same job as each seam lands.
 // ============================================================
 
 using System.Collections.ObjectModel;
@@ -279,25 +281,7 @@ public partial class RipView : UserControl
             return;
         }
 
-        var makeMkv = AppSettings.Instance.MakeMKV_Path;
-        if (string.IsNullOrWhiteSpace(makeMkv))
-        {
-            MessageBox.Show(
-                "Please set the MakeMKV path in Preferences.",
-                "MakeMKV Path Not Set",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
-            return;
-        }
-        if (!File.Exists(makeMkv))
-        {
-            MessageBox.Show(
-                $"MakeMKV was not found at {makeMkv}.",
-                "MakeMKV Not Found",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
-            return;
-        }
+        if (MakeMkvPathOrWarn() is not { } makeMkv) return;
 
         // The disc's name is its volume label: it names the ISO, the rip
         // folder and the log, so a label that cannot be a file name has to
@@ -327,7 +311,7 @@ public partial class RipView : UserControl
         bool overwrite = false;
         if (File.Exists(isoPath))
         {
-            if (!Confirm($"{name} already exists. Overwrite?"))
+            if (!Confirm($"{name} already exists. Overwrite?", "Backup"))
             {
                 StatusText.Text = $"{name} left as it was.";
                 return;
@@ -336,7 +320,7 @@ public partial class RipView : UserControl
         }
         else if (File.Exists(logPath))
         {
-            if (!Confirm($"{name} has been processed before. Back it up again?"))
+            if (!Confirm($"{name} has been processed before. Back it up again?", "Backup"))
             {
                 StatusText.Text = $"{name} left as it was.";
                 return;
@@ -427,7 +411,7 @@ public partial class RipView : UserControl
         var progress = new Progress<double>(fraction => drive.Progress = fraction);
 
         using var shrinkStop = new CancellationTokenSource();
-        var shrinking = ShrinkWhileRunningAsync(reservation, isoPath, shrinkStop.Token);
+        var shrinking = ShrinkWhileRunningAsync(reservation, () => FileLength(isoPath), shrinkStop.Token);
 
         try
         {
@@ -443,7 +427,7 @@ public partial class RipView : UserControl
             drive.FinishBackup(DriveState.Idle);
             StatusText.Text = $"{name} backup cancelled.";
         }
-        catch (Exception ex) when (ex is BackupException or IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is MakeMkvException or IOException or UnauthorizedAccessException)
         {
             // Every failure is visible and carries the program's own
             // message rather than a house one that hides it.
@@ -461,24 +445,63 @@ public partial class RipView : UserControl
     }
 
     // Every couple of seconds, hands back reserved space equal to what the
-    // ISO has grown to. A tick that can't read the ISO or resize the
-    // reserve is skipped; the next one tries again.
-    private static async Task ShrinkWhileRunningAsync(SpaceReservation reservation, string isoPath, CancellationToken token)
+    // job has written so far (`written` measures it: the ISO for a backup,
+    // the .mkv files for a rip). A tick that can't read the files or
+    // resize the reserve is skipped; the next one tries again.
+    private static async Task ShrinkWhileRunningAsync(SpaceReservation reservation, Func<long> written, CancellationToken token)
     {
         while (true)
         {
             await Task.Delay(TimeSpan.FromSeconds(2), token);
             try
             {
-                var iso = new FileInfo(isoPath);
-                if (iso.Exists) reservation.Shrink(iso.Length);
+                reservation.Shrink(written());
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }
     }
 
-    private static bool Confirm(string message) =>
-        MessageBox.Show(message, "Backup", MessageBoxButton.YesNo, MessageBoxImage.Question)
+    private static long FileLength(string path)
+    {
+        var file = new FileInfo(path);
+        return file.Exists ? file.Length : 0;
+    }
+
+    private static long RipBytes(string ripFolder) =>
+        Directory.Exists(ripFolder)
+            ? Directory.GetFiles(ripFolder, "*.mkv").Sum(FileLength)
+            : 0;
+
+    // The MakeMKV path from Preferences, or null after a message box
+    // saying what is wrong with it. Checked on Backup only: a job row
+    // exists only after a backup that needed the path, and if it has
+    // changed since, MakeMKV failing to start says so on the row.
+    private static string? MakeMkvPathOrWarn()
+    {
+        var path = AppSettings.Instance.MakeMKV_Path;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            MessageBox.Show(
+                "Please set the MakeMKV path in Preferences.",
+                "MakeMKV Path Not Set",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return null;
+        }
+        if (!File.Exists(path))
+        {
+            MessageBox.Show(
+                $"MakeMKV was not found at {path}.",
+                "MakeMKV Not Found",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return null;
+        }
+        return path;
+    }
+
+    private static bool Confirm(string message, string caption) =>
+        MessageBox.Show(message, caption, MessageBoxButton.YesNo, MessageBoxImage.Question)
             == MessageBoxResult.Yes;
 
     private void OpenBackupLog(OpticalDriveRow drive)
@@ -540,7 +563,12 @@ public partial class RipView : UserControl
             var job    = new RipJob(log.DiscName, log.Drive, _destination);
             var record = Discs.FirstOrDefault(d => d.Name.Equals(log.DiscName, StringComparison.OrdinalIgnoreCase));
             if (record != null)
+            {
                 job.Status = RecordCounts(record);
+                job.Step   = record.Titles.Any(t => t.Bound)          ? "Rip"
+                           : record.Titles.Any(t => t.RipName != null) ? "Info"
+                           : "Analyse";
+            }
             Jobs.Add(job);
         }
 
@@ -566,16 +594,34 @@ public partial class RipView : UserControl
             j.Disc.Equals(disc, StringComparison.OrdinalIgnoreCase) &&
             j.Destination.Equals(destination, StringComparison.OrdinalIgnoreCase));
 
-    private static string RecordCounts(DiscRecord record) =>
-        $"{Count(record.Titles.Count, "title")}, {Count(record.Screens.Count, "screen")}";
+    private static string RecordCounts(DiscRecord record)
+    {
+        var counts = $"{Count(record.Titles.Count, "title")}, {Count(record.Screens.Count, "screen")}";
+        var bound  = record.Titles.Count(t => t.Bound);
+        return bound == 0 ? counts : $"{counts}, {bound} bound";
+    }
 
-    // The IFO read, from the disc's backup ISO. The ISO is mounted with
-    // no drive letter, read through its volume path, and unmounted again
-    // whether the read succeeds, fails or is cancelled. A missing ISO is
-    // said so, and the row stays ready for when it is back.
+    // A job's three stages, all from the disc's backup ISO:
+    //   Analyse  the IFO read. The ISO is mounted with no drive letter,
+    //            read through its volume path, and unmounted again
+    //            whether the read succeeds, fails or is cancelled.
+    //   Info     `makemkvcon info` on the ISO file itself (no mount),
+    //            which fills each title's runtime, size, segments and
+    //            the name its rip will get.
+    //   Rip      `makemkvcon mkv` into Rip\<DISC>\, then the binder ties
+    //            each title to its file.
+    // The record is saved after each stage, so a later stage that fails
+    // leaves the earlier stages' results on disk.
+    //
+    // Checked when Start is clicked, before anything runs: the ISO is
+    // there; rips already in Rip\<DISC>\ are overwritten only on Yes;
+    // and the Destination has ReservationFactor x the ISO's size free. That space is then held
+    // by a reserve file for the whole job, shrinking as the rips grow,
+    // the same way a backup holds its space.
     private async Task RunAnalysisAsync(RipJob job)
     {
-        var isoPath = DiscStore.IsoPath(job.Destination, job.Disc);
+        var isoPath   = DiscStore.IsoPath(job.Destination, job.Disc);
+        var ripFolder = DiscStore.RipFolder(job.Destination, job.Disc);
 
         if (_busyIsos.Contains(isoPath))
         {
@@ -587,42 +633,74 @@ public partial class RipView : UserControl
             job.Status = $"{isoPath} was not found.";
             return;
         }
+        // Rips already there: asked, as Backup asks about an existing ISO.
+        // Yes deletes them only after the space check has passed, and
+        // they count as free space for that check.
+        var oldRips = Directory.Exists(ripFolder) ? Directory.GetFiles(ripFolder, "*.mkv") : Array.Empty<string>();
+        if (oldRips.Length > 0 && !Confirm($"{job.Disc} has already been ripped. Overwrite?", "Rip"))
+        {
+            job.Status = $"{job.Disc} left as it was.";
+            return;
+        }
+
+        SpaceReservation reservation;
+        try
+        {
+            var needed = DiskSpace.ReservationFor(FileLength(isoPath));
+            if (DiskSpace.FreeBytes(job.Destination) + oldRips.Sum(FileLength) < needed)
+            {
+                MessageBox.Show(
+                    "Insufficient Disk Space Available",
+                    "Insufficient Disk Space",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                return;
+            }
+            foreach (var file in oldRips)
+                File.Delete(file);
+
+            // Claimed now, on the UI thread, so the next click's check
+            // already sees this space gone.
+            reservation = SpaceReservation.Create(job.Destination, job.Disc, needed);
+        }
+        catch (Exception ex) when (ex is IOException or Win32Exception or UnauthorizedAccessException)
+        {
+            job.Status = $"{job.Disc}: {ex.Message}";
+            return;
+        }
 
         job.Begin();
         _busyIsos.Add(isoPath);
+        var runStarted = DateTime.Now;
+        var makeMkv    = AppSettings.Instance.MakeMKV_Path;
 
         // Progress is created here, on the UI thread, so its callbacks
         // come back to the UI thread and can touch the job's bindings.
-        var progress = new Progress<string>(message => job.Status = message);
-        IsoMount? mount = null;
+        var progress    = new Progress<string>(message => job.Status = message);
+        var ripProgress = new Progress<double>(fraction => job.Status = $"ripping {fraction:P0}");
+
+        using var shrinkStop = new CancellationTokenSource();
+        var shrinking = ShrinkWhileRunningAsync(reservation, () => RipBytes(ripFolder), shrinkStop.Token);
 
         try
         {
-            // The mount is not cancelled part way: stopping PowerShell in
-            // the middle could leave the image mounted. Cancel takes effect
-            // as soon as the mount returns.
-            job.Status = "mounting ISO";
-            mount = await IsoMount.MountAsync(isoPath);
-            job.Token.ThrowIfCancellationRequested();
+            job.Step = "Analyse";
+            var record = await ReadIfosAsync(job, isoPath, progress);
+            await Task.Run(() => DiscStore.Save(job.Destination, record));
 
-            var record = await Task.Run(() =>
-            {
-                var disc = DiscAnalysis.ReadDisc(
-                    job.Disc, mount.VolumePath,
-                    DiscStore.DiscFolder(job.Destination, job.Disc),
-                    AppSettings.Instance.FFmpeg_Path,
-                    progress, job.Token);
+            job.Step = "Info";
+            job.Status = "running MakeMKV info";
+            var infoLog = DiscStore.StageLogPath(job.Destination, runStarted, job.Disc, MakeMkvInfo.LogFileName);
+            await Task.Run(() => MakeMkvInfo.RunAsync(makeMkv, isoPath, infoLog, record, progress, job.Token));
+            await Task.Run(() => DiscStore.Save(job.Destination, record));
 
-                // The volume path means nothing once the ISO is unmounted;
-                // the record names the ISO it was read from instead.
-                disc.SourcePath = isoPath;
-                DiscStore.Save(job.Destination, disc);
-                return disc;
-            }, job.Token);
+            job.Step = "Rip";
+            job.Status = "starting MakeMKV rip";
+            var ripLog = DiscStore.StageLogPath(job.Destination, runStarted, job.Disc, MakeMkvRip.LogFileName);
+            await Task.Run(() => MakeMkvRip.RunAsync(makeMkv, isoPath, ripFolder, ripLog, record, ripProgress, job.Token));
+            await Task.Run(() => DiscStore.Save(job.Destination, record));
 
             job.Finish(RecordCounts(record), false);
-            if (job.Destination.Equals(_destination, StringComparison.OrdinalIgnoreCase))
-                LoadDiscs();
         }
         catch (OperationCanceledException)
         {
@@ -636,6 +714,45 @@ public partial class RipView : UserControl
         }
         finally
         {
+            shrinkStop.Cancel();
+            try { await shrinking; } catch (OperationCanceledException) { }
+            reservation.Dispose();
+            _busyIsos.Remove(isoPath);
+
+            // Whatever stage it stopped at, the saved record is what the
+            // disc list shows.
+            if (job.Destination.Equals(_destination, StringComparison.OrdinalIgnoreCase))
+                LoadDiscs();
+        }
+    }
+
+    // Mounts the ISO, reads its IFOs into a new record, and unmounts it
+    // again before returning, so nothing after this holds the mount.
+    private async Task<DiscRecord> ReadIfosAsync(RipJob job, string isoPath, IProgress<string> progress)
+    {
+        IsoMount? mount = null;
+        try
+        {
+            // The mount is not cancelled part way: stopping PowerShell in
+            // the middle could leave the image mounted. Cancel takes effect
+            // as soon as the mount returns.
+            job.Status = "mounting ISO";
+            mount = await IsoMount.MountAsync(isoPath);
+            job.Token.ThrowIfCancellationRequested();
+
+            var record = await Task.Run(() => DiscAnalysis.ReadDisc(
+                job.Disc, mount.VolumePath,
+                DiscStore.DiscFolder(job.Destination, job.Disc),
+                AppSettings.Instance.FFmpeg_Path,
+                progress, job.Token), job.Token);
+
+            // The volume path means nothing once the ISO is unmounted;
+            // the record names the ISO it was read from instead.
+            record.SourcePath = isoPath;
+            return record;
+        }
+        finally
+        {
             if (mount?.Ours == true)
             {
                 try
@@ -644,13 +761,12 @@ public partial class RipView : UserControl
                 }
                 catch (IsoMountException ex)
                 {
-                    // The read's own result stays on the row; the unmount
+                    // The job's own result stays on the row; the unmount
                     // problem goes to the status line so neither hides the
                     // other.
                     StatusText.Text = $"{job.Disc}: the ISO could not be unmounted: {ex.Message}";
                 }
             }
-            _busyIsos.Remove(isoPath);
         }
     }
 

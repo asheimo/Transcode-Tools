@@ -24,6 +24,9 @@
 // Resolved target; each title then gets NamedBy (the buttons that
 // lead to it) and ReachedFrom (the PGC commands that jump to it), and
 // each screen worth showing gets a picture (seam 4, MenuFrames).
+// The job then runs MakeMKV's info on the ISO (seam 5, MakeMkvInfo)
+// and the rip with binding (seam 6, MakeMkvRip + RipBinder); the view
+// runs the stages, see RipView.RunAnalysisAsync.
 // ============================================================
 
 using System.ComponentModel;
@@ -53,8 +56,8 @@ public sealed class RipJob : INotifyPropertyChanged
         Destination = destination;
     }
 
-    // The pipeline stage: Backup, Info, Rip or Analyse. Only Analyse
-    // runs from the jobs list while seam 1 is the whole engine.
+    // The stage the job is in, or last ran: Analyse (the IFO read),
+    // Info (MakeMKV's title list), then Rip (the rip and binding).
     private string _step = "Analyse";
     public string Step
     {

@@ -1,7 +1,9 @@
 // ============================================================
 // DiskSpace.cs
 // ------------------------------------------------------------
-// Rip mode's disk-space rule for backups:
+// Rip mode's disk-space rule. Written for backups; a job's Start uses
+// the same rule with the ISO's size in place of the disc's, and its
+// reserve file shrinks as the rips are written.
 //
 //   - Checked when Backup is clicked: free space on the Destination
 //     must cover ReservationFactor x the size Windows reports for the

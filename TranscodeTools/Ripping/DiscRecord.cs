@@ -63,7 +63,8 @@ public sealed class TitleRecord
     public List<int> CompositeOf { get; set; } = new();
 
     // Binding
-    public string? FileName    { get; set; }  // actual file on disk
+    public string? RipName     { get; set; }  // TINFO field 27: the name MakeMKV gives this title's rip
+    public string? FileName    { get; set; }  // actual file on disk, set once the binder finds it
     public bool    Bound       { get; set; }  // key matched and size inside the band
     public bool    Verified    { get; set; }  // chapter gate passed
     public long    SourceBytes { get; set; }  // TINFO field 11: title size on the disc
