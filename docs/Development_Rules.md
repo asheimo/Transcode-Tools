@@ -2,13 +2,13 @@
 
 ## Process Rules
 
-- Ask for fresh solution zip at the start of every session — never assume the container matches the repo
+- Connect the repo folder (`C:\Users\andy\source\repos\Transcode-Tools`) at the start of every session and read the working tree directly — no solution zip
 - Read the solution's code in its entirety before work begins
 - Read the reference doc in full at the start of every session before touching any code — this is why it exists
-- Before packaging: grep entire solution, explain changes clearly, ask questions, package only on explicit approval
-- Present summary of changes BEFORE asking to package — not after
-- After every file edit, view the full file to verify formatting before zipping
-- Zip files contain only changed files at root level — no subfolder prefix. Name the zip descriptively for what is being fixed (e.g. `TranscodeTools-CommandBuilder_qsv_color_fix.v1.zip`). If multiple iterations are produced in a session, version the filename (v1, v2, etc.). Always create a new zip file rather than overwriting an existing one.
+- Before sending: grep entire solution, explain changes clearly, ask questions, send only on explicit approval
+- Present summary of changes BEFORE asking to send — not after
+- After every file edit, view the full file to verify formatting before sending
+- Changed files are written in place in the working tree, each named with its full path from the repo root. Git stays with Andy: read git state only (status, diff, log), never commit, checkout or stash from the session.
 - Modernize controls; do not carry forward old patterns just because they were used before
 - App uses WPF Aero2 currently. Dark mode via DynamicResource theme switching. Fluent theme deferred to Step 12
 - When fixing Aero2 theming: always fetch actual template from VS2022 `DesignTools/SystemThemes/wpf/Aero2.NormalColor.xaml` — never guess at brush key names

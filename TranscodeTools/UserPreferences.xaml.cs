@@ -38,6 +38,8 @@ public partial class UserPreferences : Window
         string MKVPropEdit_Path,
         string MKVMerge_Path,
         string MakeMKV_Path,
+        IsoDeleteAfter IsoDeleteAfter,
+        List<string> RipHiddenExtraTypes,
         string MKVMerge_Defaults,
         string MKVMerge_Options,
         string RoboCopy_Defaults,
@@ -78,6 +80,8 @@ public partial class UserPreferences : Window
             s.MKVPropEdit_Path,
             s.MKVMerge_Path,
             s.MakeMKV_Path,
+            s.IsoDeleteAfter,
+            s.RipHiddenExtraTypes.ToList(),
             s.MKVMerge_Defaults,
             s.MKVMerge_Options,
             s.RoboCopy_Defaults,
@@ -127,6 +131,22 @@ public partial class UserPreferences : Window
         TbxMKVPropEdit.Text    = s.MKVPropEdit_Path;
         TbxMKVMerge.Text       = s.MKVMerge_Path;
         TbxMakeMKV.Text        = s.MakeMKV_Path;
+
+        // Rip tab
+        RbIsoAfterRip.IsChecked    = s.IsoDeleteAfter == IsoDeleteAfter.Rip;
+        RbIsoAfterNaming.IsChecked = s.IsoDeleteAfter == IsoDeleteAfter.Naming;
+        ExtraTypesPanel.Children.Clear();
+        foreach (var type in TitleType.Extras)
+        {
+            ExtraTypesPanel.Children.Add(new CheckBox
+            {
+                Content             = type.Label,
+                Tag                 = type.Suffix,
+                IsChecked           = !s.RipHiddenExtraTypes.Contains(type.Suffix, StringComparer.OrdinalIgnoreCase),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Margin              = new Thickness(0, 0, 0, 4),
+            });
+        }
 
         // Encode tab — vendor selector (triggers panel swap via SelectionChanged)
         CbxGpuVendor.SelectedItem = s.GpuVendor;
@@ -193,6 +213,13 @@ public partial class UserPreferences : Window
         s.MKVPropEdit_Path  = TbxMKVPropEdit.Text;
         s.MKVMerge_Path     = TbxMKVMerge.Text;
         s.MakeMKV_Path      = TbxMakeMKV.Text;
+
+        // Rip
+        s.IsoDeleteAfter = RbIsoAfterRip.IsChecked == true ? IsoDeleteAfter.Rip : IsoDeleteAfter.Naming;
+        s.RipHiddenExtraTypes = ExtraTypesPanel.Children.OfType<CheckBox>()
+            .Where(c => c.IsChecked != true)
+            .Select(c => (string)c.Tag)
+            .ToList();
 
         // Encode
         s.GpuVendor = CbxGpuVendor.SelectedItem as string ?? "NVIDIA";
@@ -270,6 +297,8 @@ public partial class UserPreferences : Window
         s.MKVPropEdit_Path        = _snapshot.MKVPropEdit_Path;
         s.MKVMerge_Path           = _snapshot.MKVMerge_Path;
         s.MakeMKV_Path            = _snapshot.MakeMKV_Path;
+        s.IsoDeleteAfter          = _snapshot.IsoDeleteAfter;
+        s.RipHiddenExtraTypes     = _snapshot.RipHiddenExtraTypes.ToList();
         s.MKVMerge_Defaults       = _snapshot.MKVMerge_Defaults;
         s.MKVMerge_Options        = _snapshot.MKVMerge_Options;
         s.RoboCopy_Defaults       = _snapshot.RoboCopy_Defaults;

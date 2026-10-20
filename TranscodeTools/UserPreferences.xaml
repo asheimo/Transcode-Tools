@@ -1,12 +1,13 @@
 <!-- ============================================================
      UserPreferences.xaml
      ============================================================
-     Tabbed preferences window. Five tabs:
+     Tabbed preferences window. Six tabs:
        1. Tool Paths   — external executable paths
-       2. Encode       — GPU vendor, presets, quality flags, HEVC default
+       2. Rip          — when the backup ISO is deleted, extras types
        3. Remux        — MKVMerge and RoboCopy defaults
-       4. File Management — title case, resolution append, auto-move
-       5. Logging         — logging settings, folder history
+       4. Encode       — GPU vendor, presets, quality flags, HEVC default
+       5. File Management — title case, resolution append, auto-move
+       6. Logging         — logging settings, folder history
      ============================================================ -->
 <Window x:Class="TranscodeTools.UserPreferences"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -146,10 +147,54 @@
             </TabItem>
 
             <!-- ════════════════════════════════════════════════════
-                 TAB 2 — ENCODE
-                 GPU vendor selector, then vendor-specific settings
-                 panels (only one visible at a time), then the
-                 Always Convert to HEVC option shared by both.
+                 TAB 2 — RIP
+                 When Rip mode deletes a disc's backup ISO, and which
+                 Plex extras types the naming list offers.
+                 ════════════════════════════════════════════════════ -->
+            <TabItem Header="Rip">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              Padding="20,16,20,16">
+                    <StackPanel>
+                        <TextBlock Text="Delete the backup ISO"
+                                   Style="{StaticResource PrefLabel}"
+                                   Margin="0,0,0,8"/>
+
+                        <RadioButton x:Name="RbIsoAfterRip"
+                                     Content="After Rip"
+                                     GroupName="IsoDeleteAfter"
+                                     HorizontalAlignment="Left"
+                                     Margin="22,0,0,4"/>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Margin="44,0,0,10"
+                                   Text="Deleted as soon as the rip and binding succeed."/>
+
+                        <RadioButton x:Name="RbIsoAfterNaming"
+                                     Content="When the disc is marked complete"
+                                     GroupName="IsoDeleteAfter"
+                                     HorizontalAlignment="Left"
+                                     Margin="22,0,0,4"/>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Margin="44,0,0,10"
+                                   Text="Deleted when you mark the disc complete, after you confirm."/>
+
+                        <Border Height="1" Background="{DynamicResource SeparatorColor}" Margin="0,6,0,16"/>
+
+                        <TextBlock Text="Extras types offered when naming"
+                                   Style="{StaticResource PrefLabel}"
+                                   Margin="0,0,0,8"/>
+                        <!-- One checkbox per Plex extras type, built in code
+                             from TitleType.Extras. -->
+                        <StackPanel x:Name="ExtraTypesPanel" Margin="22,0,0,4"/>
+                        <TextBlock Style="{StaticResource HintText}"
+                                   Margin="22,0,0,10"
+                                   Text="Main title is always offered. A file that already has a type keeps it in its list."/>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- ════════════════════════════════════════════════════
+                 TAB 3 — REMUX
+                 MKVMerge and RoboCopy CLI flag defaults.
                  ════════════════════════════════════════════════════ -->
             <TabItem Header="Remux">
                 <ScrollViewer VerticalScrollBarVisibility="Auto"
@@ -190,8 +235,10 @@
             </TabItem>
 
             <!-- ════════════════════════════════════════════════════
-                 TAB 3 — REMUX
-                 MKVMerge and RoboCopy CLI flag defaults.
+                 TAB 4 — ENCODE
+                 GPU vendor selector, then vendor-specific settings
+                 panels (only one visible at a time), then the
+                 Always Convert to HEVC option shared by both.
                  ════════════════════════════════════════════════════ -->
             <TabItem Header="Encode">
                 <ScrollViewer VerticalScrollBarVisibility="Auto"
@@ -355,7 +402,7 @@
             </TabItem>
 
             <!-- ════════════════════════════════════════════════════
-                 TAB 4 — FILE MANAGEMENT
+                 TAB 5 — FILE MANAGEMENT
                  Title case, resolution append, auto-move.
                  ════════════════════════════════════════════════════ -->
             <TabItem Header="File Management">
@@ -428,7 +475,7 @@
             </TabItem>
 
             <!-- ════════════════════════════════════════════════════
-                 TAB 5 — LOGGING
+                 TAB 6 — LOGGING
                  Logging settings and folder history size.
                  ════════════════════════════════════════════════════ -->
             <TabItem Header="Logging">

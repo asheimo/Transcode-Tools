@@ -1,12 +1,22 @@
 // ============================================================
 // RipView.xaml.cs
 // ------------------------------------------------------------
-// Rip mode's content. The Destination picker and its history,
-// the optical drive list, and the disc list bound to the disc
-// records under <Destination>\Rip\<DISC>\Menu\. Selecting a disc
-// lists its disc titles; selecting a disc title shows a chip per
+// Rip mode's content. The Destination picker and its history, the
+// optical drive list, and one list of the Destination's discs (the
+// jobs list), each with its next step; the disc records under
+// <Destination>\Rip\<DISC>\Menu\ back it. Selecting a disc lists its
+// titles below; selecting a disc title shows a chip per
 // menu screen that names it; clicking a chip shows that screen with
-// its buttons outlined and the naming button highlighted.
+// its buttons outlined and the naming button highlighted. The picture
+// scales to its space: Fit Width fills the width and scrolls, Fit
+// Window always shows it whole (PictureFit, saved in AppSettings).
+//
+// The title list (a DataGrid) is also where titles are named. It has one
+// row per .mkv in the disc's rip folder (TitleNaming.BuildRows): the Name
+// cell edits in place and the Type dropdown picks Main title or a Plex
+// extras type, unless the row's Delete box is ticked, and one
+// Apply button above the list applies every changed row. Right-click a
+// row to play its file in MPV.
 //
 // The drive row owns the backup. Its button reads Backup, then
 // Cancel while MakeMKV runs (the row fills green with MakeMKV's own
@@ -17,8 +27,11 @@
 // a message box refuses it. A running backup holds its space in a
 // reserve file that shrinks as the ISO grows.
 //
-// A completed backup adds a row to the jobs list with a Start
-// button. Start runs three stages from the backup ISO, not the drive:
+// A completed backup adds a row to the jobs list. Its Step is the
+// disc's next step and its button reads Start, then Continue, which
+// picks up at that step (at Naming it opens the disc's titles); the
+// start-over button runs the chain again from Analyse. The chain runs
+// three stages from the backup ISO, not the drive:
 // Analyse (the ISO is mounted with no drive letter by IsoMount, the
 // IFOs and menus are read on a background thread, the ISO is
 // unmounted), Info (`makemkvcon info` on the ISO file, MakeMkvInfo)
@@ -36,6 +49,8 @@ using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Input;
 using System.Runtime.InteropServices;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -50,9 +65,13 @@ public partial class RipView : UserControl
 {
     // ── Collections the view binds to ────────────────────────────────
     public ObservableCollection<OpticalDriveRow> Drives { get; } = new();
-    public ObservableCollection<DiscRecord>      Discs  { get; } = new();
     public ObservableCollection<ScreenChip>      Chips  { get; } = new();
     public ObservableCollection<RipJob>          Jobs   { get; } = new();
+    public ObservableCollection<NamingRow>       TitleRows { get; } = new();
+
+    // The disc records under the Destination. The jobs list shows one row
+    // per disc; a selected row's record supplies its titles.
+    private readonly List<DiscRecord> _records = new();
 
     // The Destination currently loaded, or "" before one is chosen.
     private string _destination = "";
@@ -81,14 +100,26 @@ public partial class RipView : UserControl
     private const string NoTitleSelectedText =
         "Select a disc title to see the menu screen it was named from.";
 
+    private const string SelectDiscText = "Click Continue on a disc above to see its titles.";
+
     public RipView()
     {
         InitializeComponent();
         DriveList.ItemsSource = Drives;
-        DiscList.ItemsSource  = Discs;
         ChipStrip.ItemsSource = Chips;
         JobList.ItemsSource   = Jobs;
-        ShowPlaceholder(NoTitleSelectedText);
+        TitleList.ItemsSource = TitleRows;
+        ClearTitles(SelectDiscText);
+
+        // Checking the saved choice raises FitRadio_Checked, which applies it.
+        var fitRadio = AppSettings.Instance.RipPictureFit == PictureFit.Window ? FitWindowRadio : FitWidthRadio;
+        fitRadio.IsChecked = true;
+
+        // Complete discs drop out of view while the box is ticked. Checking
+        // the saved choice raises HideComplete_Changed, which refreshes it.
+        CollectionViewSource.GetDefaultView(Jobs).Filter = row =>
+            !(AppSettings.Instance.RipHideComplete && row is RipJob { Step: JobStep.Complete });
+        HideCompleteCheck.IsChecked = AppSettings.Instance.RipHideComplete;
     }
 
     // Loaded fires once the view is in the window, even while it is
@@ -175,14 +206,14 @@ public partial class RipView : UserControl
 
     private void LoadDiscs()
     {
-        ShowDiscList();
-        Discs.Clear();
+        ClearTitles(SelectDiscText);
+        _records.Clear();
 
         var problems = new List<string>();
         foreach (var disc in DiscStore.LoadAll(_destination, problems))
-            Discs.Add(disc);
+            _records.Add(disc);
 
-        var loaded = Discs.Count == 1 ? "1 disc loaded." : $"{Discs.Count} discs loaded.";
+        var loaded = _records.Count == 1 ? "1 disc loaded." : $"{_records.Count} discs loaded.";
         StatusText.Text = problems.Count == 0
             ? loaded
             : $"{loaded} Could not read {problems.Count}: {string.Join("; ", problems)}";
@@ -383,10 +414,10 @@ public partial class RipView : UserControl
             return;
         }
         if (destination.Equals(_destination, StringComparison.OrdinalIgnoreCase) &&
-            Discs.FirstOrDefault(d => d.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) is { } oldDisc)
+            _records.FirstOrDefault(d => d.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) is { } oldDisc)
         {
-            if (ReferenceEquals(_selectedDisc, oldDisc)) ShowDiscList();
-            Discs.Remove(oldDisc);
+            if (ReferenceEquals(_selectedDisc, oldDisc)) ClearTitles(SelectDiscText);
+            _records.Remove(oldDisc);
         }
 
         // Claim the space before anything else can: clicks are handled one
@@ -408,7 +439,7 @@ public partial class RipView : UserControl
 
         // Progress is created here, on the UI thread, so its callbacks
         // come back to the UI thread and can touch the row's bindings.
-        var progress = new Progress<double>(fraction => drive.Progress = fraction);
+        var progress = new Progress<MakeMkvProgress>(bars => drive.Progress = bars.Total);
 
         using var shrinkStop = new CancellationTokenSource();
         var shrinking = ShrinkWhileRunningAsync(reservation, () => FileLength(isoPath), shrinkStop.Token);
@@ -533,43 +564,75 @@ public partial class RipView : UserControl
 
     // ── Jobs ─────────────────────────────────────────────────────────
 
+    // Cancel while running; otherwise Start or Continue from the row's
+    // next step. Naming happens in the title list, so a disc at Naming
+    // opens its titles there, and Open on a complete disc lists them
+    // read-only.
     private async void JobAction_Click(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is not RipJob job) return;
 
         if (job.IsRunning)
             job.Cancel();
+        else if (job.Step is JobStep.Naming or JobStep.Complete)
+            OpenTitles(job);
         else
-            await RunAnalysisAsync(job);
+            await RunJobAsync(job, job.Step);
+    }
+
+    // The start-over button and the row's right-click Start Over: the whole
+    // chain again from Analyse. Rips already there are replaced only after
+    // the overwrite question RunJobAsync asks.
+    private async void StartOver_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not RipJob { CanStartOver: true } job) return;
+        await RunJobAsync(job, JobStep.Analyse);
+    }
+
+    // Lists the disc's titles below and selects its row, so the row shows
+    // which disc is open. Selecting a row by clicking it lists nothing.
+    private void OpenTitles(RipJob job)
+    {
+        JobList.SelectedItem = job;
+        ShowTitlesFor(job);
     }
 
     // Rebuilds the jobs list from what is on disk under the Destination:
-    // one row per disc whose backup log ends "Backup complete" and whose
-    // ISO is still in ISO\. A disc with a record shows its counts; one
-    // without shows "ready". Running jobs are left alone, since they are
-    // real work in progress; every other row is rebuilt.
+    // one row per disc with a record, and one per disc backed up but not
+    // yet analysed (its backup log ends "Backup complete" and its ISO is
+    // still in ISO\). A row stays after its ISO is deleted; only starting
+    // over needs the ISO. A disc with a record shows its counts and its
+    // next step; one without shows "ready" with Analyse next. Running jobs
+    // are left alone, since they are real work in progress; every other
+    // row is rebuilt.
     private void RebuildJobs()
     {
         foreach (var job in Jobs.Where(j => !j.IsRunning).ToList())
             Jobs.Remove(job);
 
         var problems = new List<string>();
-        foreach (var log in DiscStore.ReadBackupLogs(_destination, problems))
-        {
-            if (!log.Completed) continue;
-            if (!File.Exists(DiscStore.IsoPath(_destination, log.DiscName))) continue;
-            if (FindJob(log.DiscName, _destination) != null) continue;   // running
+        var backups  = DiscStore.ReadBackupLogs(_destination, problems)
+                                .Where(l => l.Completed)
+                                .ToDictionary(l => l.DiscName, StringComparer.OrdinalIgnoreCase);
 
-            var job    = new RipJob(log.DiscName, log.Drive, _destination);
-            var record = Discs.FirstOrDefault(d => d.Name.Equals(log.DiscName, StringComparison.OrdinalIgnoreCase));
+        var names = _records.Select(r => r.Name)
+                            .Concat(backups.Keys)
+                            .Distinct(StringComparer.OrdinalIgnoreCase);
+        foreach (var name in names)
+        {
+            if (FindJob(name, _destination) != null) continue;   // running
+
+            var hasIso = File.Exists(DiscStore.IsoPath(_destination, name));
+            var record = _records.FirstOrDefault(d => d.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (record == null && !hasIso) continue;
+
+            var job = new RipJob(name, backups.GetValueOrDefault(name)?.Drive ?? "", _destination) { HasIso = hasIso };
             if (record != null)
             {
                 job.Status = RecordCounts(record);
-                job.Step   = record.Titles.Any(t => t.Bound)          ? "Rip"
-                           : record.Titles.Any(t => t.RipName != null) ? "Info"
-                           : "Analyse";
+                job.Step   = NextStep(record);
             }
-            Jobs.Add(job);
+            AddJob(job);
         }
 
         if (problems.Count > 0)
@@ -586,13 +649,59 @@ public partial class RipView : UserControl
         var existing = FindJob(disc, destination);
         if (existing != null && !existing.IsRunning)
             Jobs.Remove(existing);
-        Jobs.Add(new RipJob(disc, drive, destination));
+        AddJob(new RipJob(disc, drive, destination) { HasIso = true });
     }
+
+    // Rows are kept in disc-name order.
+    private void AddJob(RipJob job)
+    {
+        int at = 0;
+        while (at < Jobs.Count && string.Compare(Jobs[at].Disc, job.Disc, StringComparison.OrdinalIgnoreCase) < 0)
+            at++;
+        Jobs.Insert(at, job);
+    }
+
+    // Saved, so the list opens the way it was left. Hidden rows are only
+    // filtered out of view.
+    private void HideComplete_Changed(object sender, RoutedEventArgs e)
+    {
+        var hide = HideCompleteCheck.IsChecked == true;
+        if (AppSettings.Instance.RipHideComplete != hide)
+        {
+            AppSettings.Instance.RipHideComplete = hide;
+            AppSettings.Instance.Save();
+        }
+        RefreshJobFilter();
+    }
+
+    private void RefreshJobFilter() => CollectionViewSource.GetDefaultView(Jobs).Refresh();
 
     private RipJob? FindJob(string disc, string destination) =>
         Jobs.FirstOrDefault(j =>
             j.Disc.Equals(disc, StringComparison.OrdinalIgnoreCase) &&
             j.Destination.Equals(destination, StringComparison.OrdinalIgnoreCase));
+
+    // The next step for a disc with a record. Analyse is done, since it is
+    // what writes the record. The rip is done when the record has the file
+    // list a finished rip writes and every file on it not deleted in
+    // naming is in the rip folder, whether or not any title was bound.
+    // Info is done once any title has the name its rip will get. A disc is
+    // Complete only once it has been marked complete (DiscRecord.Complete).
+    private static JobStep NextStep(DiscRecord record)
+    {
+        var onDisk = Directory.Exists(record.RipFolder)
+            ? Directory.GetFiles(record.RipFolder, "*.mkv")
+                       .Select(f => System.IO.Path.GetFileName(f))
+                       .ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var ripDone = record.RipFiles is { } ripped &&
+                      ripped.Where(f => !f.Deleted).All(f => onDisk.Contains(f.Name));
+
+        return record.Complete                             ? JobStep.Complete
+             : ripDone                                     ? JobStep.Naming
+             : record.Titles.Any(t => t.RipName != null)  ? JobStep.Rip
+             :                                              JobStep.Info;
+    }
 
     private static string RecordCounts(DiscRecord record)
     {
@@ -611,14 +720,16 @@ public partial class RipView : UserControl
     //   Rip      `makemkvcon mkv` into Rip\<DISC>\, then the binder ties
     //            each title to its file.
     // The record is saved after each stage, so a later stage that fails
-    // leaves the earlier stages' results on disk.
+    // leaves the earlier stages' results on disk. Continue picks up at
+    // `from`: Info and Rip start from the saved record, which holds what
+    // they need from the stages before them.
     //
     // Checked when Start is clicked, before anything runs: the ISO is
     // there; rips already in Rip\<DISC>\ are overwritten only on Yes;
     // and the Destination has ReservationFactor x the ISO's size free. That space is then held
     // by a reserve file for the whole job, shrinking as the rips grow,
     // the same way a backup holds its space.
-    private async Task RunAnalysisAsync(RipJob job)
+    private async Task RunJobAsync(RipJob job, JobStep from)
     {
         var isoPath   = DiscStore.IsoPath(job.Destination, job.Disc);
         var ripFolder = DiscStore.RipFolder(job.Destination, job.Disc);
@@ -673,34 +784,61 @@ public partial class RipView : UserControl
         _busyIsos.Add(isoPath);
         var runStarted = DateTime.Now;
         var makeMkv    = AppSettings.Instance.MakeMKV_Path;
+        var deleteIso  = AppSettings.Instance.IsoDeleteAfter == IsoDeleteAfter.Rip;
 
         // Progress is created here, on the UI thread, so its callbacks
         // come back to the UI thread and can touch the job's bindings.
         var progress    = new Progress<string>(message => job.Status = message);
-        var ripProgress = new Progress<double>(fraction => job.Status = $"ripping {fraction:P0}");
+        var ripProgress = new Progress<RipProgress>(p => job.Status = p.Files > 0
+            ? $"({p.File}/{p.Files}) ripping {p.Current:P0} \u00B7 {p.Total:P0} total"
+            : $"ripping {p.Total:P0}");
 
         using var shrinkStop = new CancellationTokenSource();
         var shrinking = ShrinkWhileRunningAsync(reservation, () => RipBytes(ripFolder), shrinkStop.Token);
 
         try
         {
-            job.Step = "Analyse";
-            var record = await ReadIfosAsync(job, isoPath, progress);
-            await Task.Run(() => DiscStore.Save(job.Destination, record));
-
-            job.Step = "Info";
-            job.Status = "running MakeMKV info";
+            job.Step = from;
+            var record = from == JobStep.Analyse
+                ? await ReadIfosAsync(job, isoPath, progress)
+                : (await Task.Run(() => DiscStore.Load(job.Destination, job.Disc))
+                   ?? throw new FileNotFoundException($"The saved record for {job.Disc} was not found. Start it over."));
             var infoLog = DiscStore.StageLogPath(job.Destination, runStarted, job.Disc, MakeMkvInfo.LogFileName);
-            await Task.Run(() => MakeMkvInfo.RunAsync(makeMkv, isoPath, infoLog, record, progress, job.Token));
+            record.RunLogFolder = System.IO.Path.GetDirectoryName(infoLog);
             await Task.Run(() => DiscStore.Save(job.Destination, record));
 
-            job.Step = "Rip";
+            if (from <= JobStep.Info)
+            {
+                job.Step = JobStep.Info;
+                job.Status = "running MakeMKV info";
+                await Task.Run(() => MakeMkvInfo.RunAsync(makeMkv, isoPath, infoLog, record, progress, job.Token));
+                await Task.Run(() => DiscStore.Save(job.Destination, record));
+            }
+
+            job.Step = JobStep.Rip;
             job.Status = "starting MakeMKV rip";
             var ripLog = DiscStore.StageLogPath(job.Destination, runStarted, job.Disc, MakeMkvRip.LogFileName);
             await Task.Run(() => MakeMkvRip.RunAsync(makeMkv, isoPath, ripFolder, ripLog, record, ripProgress, job.Token));
             await Task.Run(() => DiscStore.Save(job.Destination, record));
 
+            // "After Rip": the ISO goes once the rip and binding are saved, so
+            // a delete that fails fails the job but loses nothing. Logged in
+            // rip.log after MakeMkvRip's own lines.
+            if (deleteIso)
+            {
+                File.Delete(isoPath);
+                File.AppendAllText(ripLog, $"ISO deleted: {isoPath}{Environment.NewLine}");
+            }
+
+            job.Step = NextStep(record);
             job.Finish(RecordCounts(record), false);
+
+            // The row stays without its ISO; only starting over needs it.
+            if (deleteIso)
+            {
+                job.HasIso = false;
+                StatusText.Text = $"{job.Disc} ripped ({RecordCounts(record)}); its ISO was deleted.";
+            }
         }
         catch (OperationCanceledException)
         {
@@ -720,10 +858,45 @@ public partial class RipView : UserControl
             _busyIsos.Remove(isoPath);
 
             // Whatever stage it stopped at, the saved record is what the
-            // disc list shows.
+            // titles show. Only this disc's record is reloaded, so names
+            // being typed for another disc are kept; this disc's titles
+            // are listed again if they are the ones open.
             if (job.Destination.Equals(_destination, StringComparison.OrdinalIgnoreCase))
-                LoadDiscs();
+            {
+                RefreshDiscEntry(job.Disc);
+                if (_selectedDisc?.Name.Equals(job.Disc, StringComparison.OrdinalIgnoreCase) == true)
+                    ShowTitlesFor(job);
+            }
         }
+    }
+
+    // Reloads one disc's record into the disc list without touching what
+    // the view is showing. A record that can no longer be read leaves the
+    // list, and the reason goes to the status line.
+    private void RefreshDiscEntry(string discName)
+    {
+        var problems = new List<string>();
+        var fresh = DiscStore.LoadAll(_destination, problems)
+                             .FirstOrDefault(d => d.Name.Equals(discName, StringComparison.OrdinalIgnoreCase));
+        if (problems.Count > 0)
+            StatusText.Text = $"Could not read {problems.Count} record(s): {string.Join("; ", problems)}";
+
+        var at = _records.FindIndex(d => d.Name.Equals(discName, StringComparison.OrdinalIgnoreCase));
+        if (fresh == null)
+        {
+            if (at >= 0) _records.RemoveAt(at);
+            return;
+        }
+        if (at >= 0)
+        {
+            _records[at] = fresh;
+            return;
+        }
+
+        at = 0;
+        while (at < _records.Count && string.Compare(_records[at].Name, fresh.Name, StringComparison.OrdinalIgnoreCase) < 0)
+            at++;
+        _records.Insert(at, fresh);
     }
 
     // Mounts the ISO, reads its IFOs into a new record, and unmounts it
@@ -815,57 +988,332 @@ public partial class RipView : UserControl
         return IntPtr.Zero;
     }
 
-    // ── Left column: discs -> disc titles ────────────────────────────
+    // ── Titles of the selected disc ────────────────────────────────
 
-    private void DiscList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    // A disc with a record lists its titles; one not yet analysed has none.
+    private void ShowTitlesFor(RipJob? job)
     {
-        if (DiscList.SelectedItem is not DiscRecord disc) return;
+        if (job == null)
+        {
+            ClearTitles(SelectDiscText);
+            return;
+        }
+
+        var disc = _records.FirstOrDefault(d => d.Name.Equals(job.Disc, StringComparison.OrdinalIgnoreCase));
+        if (disc == null)
+        {
+            ClearTitles($"{job.Disc} has no titles until it has been analysed.");
+            return;
+        }
         ShowDiscTitles(disc);
     }
 
+    // Opens on the first title, so its menu screen shows straight away.
     private void ShowDiscTitles(DiscRecord disc)
     {
         _selectedDisc = disc;
-        SelectedDiscName.Text  = disc.Name;
-        TitleList.ItemsSource  = disc.Titles;
-        TitleList.SelectedItem = null;
+        SelectedDiscName.Text = disc.Name;
 
-        DiscTitlesHeader.Visibility = Visibility.Visible;
-        DiscList.Visibility         = Visibility.Collapsed;
-        TitleList.Visibility        = Visibility.Visible;
+        TitleRows.Clear();
+        try
+        {
+            var shownExtras = TitleType.ShownExtras(AppSettings.Instance.RipHiddenExtraTypes);
+            foreach (var row in TitleNaming.BuildRows(disc, shownExtras))
+            {
+                row.PropertyChanged += NamingRow_PropertyChanged;
+                TitleRows.Add(row);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            StatusText.Text = $"{disc.Name}: the rip folder could not be read: {ex.Message}";
+        }
+
+        DiscTitlesHeader.Visibility  = Visibility.Visible;
+        TitlesPlaceholder.Visibility = Visibility.Collapsed;
+        TitleList.Visibility         = Visibility.Visible;
+        TitleList.IsReadOnly         = disc.Complete;
+        TitleList.SelectedIndex     = TitleRows.Count > 0 ? 0 : -1;
+        UpdatePanelButtons();
     }
 
-    private void BackToDiscs_Click(object sender, RoutedEventArgs e) => ShowDiscList();
-
-    private void ShowDiscList()
+    // No disc's titles: the list area says why, and the picture is cleared.
+    private void ClearTitles(string message)
     {
         _selectedDisc = null;
-        TitleList.ItemsSource = null;
+        TitleRows.Clear();
         Chips.Clear();
         ShowPlaceholder(NoTitleSelectedText);
 
-        DiscTitlesHeader.Visibility = Visibility.Collapsed;
-        TitleList.Visibility        = Visibility.Collapsed;
-        DiscList.Visibility         = Visibility.Visible;
-        DiscList.SelectedItem       = null;
+        DiscTitlesHeader.Visibility  = Visibility.Collapsed;
+        TitleList.Visibility         = Visibility.Collapsed;
+        TitlesPlaceholder.Text       = message;
+        TitlesPlaceholder.Visibility = Visibility.Visible;
     }
 
     // Right-click on a disc row: open its rip folder. The menu item's
-    // DataContext is the row's DiscRecord, inherited from the row.
+    // DataContext is the row's RipJob, inherited from the row.
     private void OpenDiscFolder_Click(object sender, RoutedEventArgs e)
     {
-        if ((sender as FrameworkElement)?.DataContext is not DiscRecord disc) return;
+        if ((sender as FrameworkElement)?.DataContext is not RipJob job) return;
 
-        if (!Directory.Exists(disc.RipFolder))
+        var folder = DiscStore.RipFolder(job.Destination, job.Disc);
+        if (!Directory.Exists(folder))
         {
             MessageBox.Show(
-                $"The rip folder for {disc.Name} was not found:\n{disc.RipFolder}",
+                $"The rip folder for {job.Disc} was not found:\n{folder}",
                 "Folder Not Found",
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
             return;
         }
-        Process.Start("explorer.exe", $"\"{disc.RipFolder}\"");
+        Process.Start("explorer.exe", $"\"{folder}\"");
+    }
+
+    // ── Naming ───────────────────────────────────────────────────────
+
+    // Clicking into a row's Delete box selects the row, so its menu screen
+    // shows while it is being worked on.
+    private void TitleRow_PreviewGotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (sender is DataGridRow row)
+            row.IsSelected = true;
+    }
+
+    // Only the Name column is editable, and not on a row ticked for Delete:
+    // the edit is refused and the status line says why.
+    private void TitleList_BeginningEdit(object sender, DataGridBeginningEditEventArgs e)
+    {
+        if (e.Row.Item is not NamingRow { CanEdit: false }) return;
+
+        e.Cancel = true;
+        StatusText.Text = TitleNaming.UntickDeleteToEdit;
+    }
+
+    // A click in a Name cell selects its row and starts the edit straight
+    // away; the DataGrid's own rule is a second click. BeginEdit goes
+    // through TitleList_BeginningEdit, so a row ticked for Delete still
+    // refuses. The click is not handled here, so it carries on into the
+    // text box and places the caret.
+    private void NameCell_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not DataGridCell { IsEditing: false } cell) return;
+
+        cell.Focus();
+        DataGridRow.GetRowContainingElement(cell).IsSelected = true;
+        TitleList.BeginEdit(e);
+    }
+
+    // A name being typed only reaches its row when the edit ends (Enter, or
+    // leaving the cell), which is what lets Esc undo it. So Apply is enabled
+    // for the whole edit; Apply ends the edit first and then looks at the
+    // rows. When an edit ends any other way, the button is set again once the
+    // grid has written the value back.
+    private void TitleList_PreparingCellForEdit(object? sender, DataGridPreparingCellForEditEventArgs e)
+    {
+        ApplyButton.IsEnabled    = true;
+        CompleteButton.IsEnabled = false;
+    }
+
+    private void TitleList_CellEditEnding(object? sender, DataGridCellEditEndingEventArgs e) =>
+        Dispatcher.InvokeAsync(UpdatePanelButtons);
+
+    private void NamingRow_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(NamingRow.HasChanges))
+            UpdatePanelButtons();
+    }
+
+    // Naming: Apply while there are changes, Complete while there are none.
+    // A complete disc: Edit, and Complete disabled.
+    private void UpdatePanelButtons()
+    {
+        var complete = _selectedDisc?.Complete == true;
+        var changes  = TitleRows.Any(r => r.HasChanges);
+
+        ApplyButton.Content      = complete ? "Edit" : "Apply";
+        ApplyButton.IsEnabled    = complete || changes;
+        CompleteButton.IsEnabled = !complete && !changes;
+    }
+
+    private void PlayInMpv_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not NamingRow row || _selectedDisc is null) return;
+        MainWindow.TryLaunch(AppSettings.Instance.MPV_Path, System.IO.Path.Combine(_selectedDisc.RipFolder, row.FileName));
+    }
+
+    // Applies every changed row: the ticked Deletes first, which can free a
+    // name a rename wants, then the renames. Every row is checked before
+    // anything changes; any problem stops the whole Apply and lists them.
+    // One confirm covers the lot. It stops at the first file that can't be
+    // changed, keeping what was done before it. A deleted file's row leaves
+    // the list.
+    private void Apply_Click(object sender, RoutedEventArgs e)
+    {
+        if (_selectedDisc is not { } disc) return;
+
+        // A running Start rewrites this disc's rips and record under the rows.
+        if (FindJob(disc.Name, _destination) is { IsRunning: true })
+        {
+            StatusText.Text = $"{disc.Name} is being ripped. Apply once it finishes.";
+            return;
+        }
+
+        // On a complete disc the button reads Edit and reopens the disc.
+        if (disc.Complete)
+        {
+            EditDisc(disc);
+            return;
+        }
+
+        TitleList.CommitEdit(DataGridEditingUnit.Row, true);
+
+        var changed = TitleRows.Where(r => r.HasChanges).ToList();
+        if (changed.Count == 0) return;
+
+        var deletes = changed.Where(r => r.Delete).ToList();
+        var freed   = deletes.Select(r => r.FileName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var problems = changed
+            .Select(r => (Row: r, Problem: TitleNaming.Problem(r, disc, freed)))
+            .Where(x => x.Problem != null)
+            .Select(x => $"{RowLabel(x.Row)}: {x.Problem}")
+            .ToList();
+        var renames = changed.Where(r => !r.Delete).ToList();
+        problems.AddRange(renames
+            .GroupBy(TitleNaming.TargetFile, StringComparer.OrdinalIgnoreCase)
+            .Where(g => g.Count() > 1)
+            .Select(g => $"{string.Join(", ", g.Select(RowLabel))}: the same name, \"{g.Key}\", is typed more than once."));
+        if (problems.Count > 0)
+        {
+            MessageBox.Show(string.Join("\n", problems), "Cannot Apply", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var message = $"Rename {Count(renames.Count, "file")} and delete {deletes.Count}?";
+        var untagged = renames
+            .Where(r => r.Type == TitleType.MainTitle && !TitleNaming.LooksPlexReady(TitleNaming.StripExtension(r.Name)))
+            .ToList();
+        if (untagged.Count > 0)
+            message += $"\n\nNo year or episode number in: {string.Join(", ", untagged.Select(r => TitleNaming.StripExtension(r.Name)))}";
+        if (!Confirm(message, "Apply")) return;
+
+        int done = 0;
+        try
+        {
+            foreach (var row in deletes)
+            {
+                TitleNaming.DeleteFile(row, disc, _destination);
+                TitleRows.Remove(row);
+                done++;
+            }
+            foreach (var row in renames)
+            {
+                TitleNaming.Rename(row, disc, _destination);
+                done++;
+            }
+            StatusText.Text = $"Renamed {renames.Count}, deleted {deletes.Count}.";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            StatusText.Text = $"{done} of {changed.Count} changes applied.";
+            MessageBox.Show(ex.Message, "Apply Failed", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        UpdateJobRow(disc);
+        UpdatePanelButtons();
+    }
+
+    // After naming, the disc's row shows its new counts and next step. A
+    // disc just marked complete drops out of view while complete discs are
+    // hidden; its titles stay listed below.
+    private void UpdateJobRow(DiscRecord disc)
+    {
+        if (FindJob(disc.Name, _destination) is not { } job) return;
+        job.Status = RecordCounts(disc);
+        job.Step   = NextStep(disc);
+        RefreshJobFilter();
+    }
+
+    private static string RowLabel(NamingRow row) =>
+        row.Title is { } title ? $"Title {title.Number}" : row.FileName;
+
+    // Marks the disc complete. Every file left must be named first. With the
+    // "when the disc is marked complete" setting and the ISO still there,
+    // the ISO is deleted too, after Confirm; Cancel leaves everything as it
+    // was. The ISO goes before the mark, so a delete that fails changes
+    // nothing. The row stays, without the start-over button.
+    private void Complete_Click(object sender, RoutedEventArgs e)
+    {
+        if (_selectedDisc is not { } disc) return;
+
+        if (FindJob(disc.Name, _destination) is { IsRunning: true })
+        {
+            StatusText.Text = $"{disc.Name} is being ripped. Mark it complete once it finishes.";
+            return;
+        }
+
+        var unnamed = TitleNaming.UnnamedFiles(disc);
+        if (unnamed.Count > 0)
+        {
+            MessageBox.Show(
+                $"These files have no name and type yet:\n{string.Join("\n", unnamed)}",
+                "Cannot Complete",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+
+        var iso       = DiscStore.IsoPath(_destination, disc.Name);
+        var deleteIso = AppSettings.Instance.IsoDeleteAfter == IsoDeleteAfter.Naming && File.Exists(iso);
+        if (deleteIso &&
+            !ConfirmDialog.Show(Window.GetWindow(this), $"Mark {disc.Name} complete? Its ISO will be deleted.", "Complete"))
+            return;
+
+        try
+        {
+            if (deleteIso)
+            {
+                File.Delete(iso);
+                TitleNaming.Log(disc, _destination, $"ISO deleted: {iso}");
+                if (FindJob(disc.Name, _destination) is { } job)
+                    job.HasIso = false;
+            }
+            disc.Complete = true;
+            DiscStore.Save(_destination, disc);
+            TitleNaming.Log(disc, _destination, "marked complete");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(ex.Message, "Complete Failed", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        TitleList.IsReadOnly = true;
+        StatusText.Text = deleteIso ? $"{disc.Name} is complete; its ISO was deleted." : $"{disc.Name} is complete.";
+        UpdateJobRow(disc);
+        UpdatePanelButtons();
+    }
+
+    // Edit on a complete disc: back to Naming, with the titles editable.
+    private void EditDisc(DiscRecord disc)
+    {
+        try
+        {
+            disc.Complete = false;
+            DiscStore.Save(_destination, disc);
+            TitleNaming.Log(disc, _destination, "reopened for editing");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            disc.Complete = true;
+            MessageBox.Show(ex.Message, "Edit Failed", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        TitleList.IsReadOnly = false;
+        StatusText.Text = $"{disc.Name} is open for editing.";
+        UpdateJobRow(disc);
+        UpdatePanelButtons();
     }
 
     // ── Chip strip ───────────────────────────────────────────────────
@@ -877,7 +1325,12 @@ public partial class RipView : UserControl
     {
         Chips.Clear();
 
-        if (TitleList.SelectedItem is not TitleRecord title || _selectedDisc is null)
+        if (TitleList.SelectedItem is NamingRow { Title: null })
+        {
+            ShowPlaceholder("No title claims this file, so no menu screen names it.");
+            return;
+        }
+        if (TitleList.SelectedItem is not NamingRow { Title: { } title } || _selectedDisc is null)
         {
             ShowPlaceholder(NoTitleSelectedText);
             return;
@@ -920,6 +1373,20 @@ public partial class RipView : UserControl
 
     // ── Picture + hotspots ───────────────────────────────────────────
 
+    // Fit Window: no vertical scrolling, so the Viewbox is handed the whole
+    // space and shows the picture whole. Fit Width: vertical scrolling, so
+    // its height is unlimited and it scales to the width alone.
+    private void FitRadio_Checked(object sender, RoutedEventArgs e)
+    {
+        var fit = ReferenceEquals(sender, FitWindowRadio) ? PictureFit.Window : PictureFit.Width;
+        PictureScroll.VerticalScrollBarVisibility =
+            fit == PictureFit.Window ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
+
+        if (AppSettings.Instance.RipPictureFit == fit) return;
+        AppSettings.Instance.RipPictureFit = fit;
+        AppSettings.Instance.Save();
+    }
+
     private void ShowScreen(ScreenChip chip)
     {
         if (_selectedDisc is null) return;
@@ -959,7 +1426,8 @@ public partial class RipView : UserControl
         }
 
         // Size the frame to the picture's own pixels so button rectangles,
-        // which are in those pixels, line up for NTSC and PAL alike.
+        // which are in those pixels, line up for NTSC and PAL alike. The
+        // Viewbox then scales frame and rectangles together.
         PictureFrame.Width  = bitmap.PixelWidth;
         PictureFrame.Height = bitmap.PixelHeight;
         MenuImage.Source    = bitmap;
@@ -967,7 +1435,8 @@ public partial class RipView : UserControl
         DrawHotspots(chip);
 
         PicturePlaceholder.Visibility = Visibility.Collapsed;
-        PictureBox.Visibility         = Visibility.Visible;
+        PictureScroll.Visibility      = Visibility.Visible;
+        PictureScroll.ScrollToTop();
     }
 
     // Outlines every button in the set and highlights the ones that name
@@ -1011,7 +1480,7 @@ public partial class RipView : UserControl
 
     private void ShowPlaceholder(string text)
     {
-        PictureBox.Visibility         = Visibility.Collapsed;
+        PictureScroll.Visibility      = Visibility.Collapsed;
         MenuImage.Source              = null;
         HotspotLayer.Children.Clear();
         PicturePlaceholder.Text       = text;
@@ -1038,6 +1507,10 @@ public static class RipColors
 }
 
 public enum DriveState { Idle, BackingUp, Done, Failed }
+
+// How the menu picture uses its space: fill the width and scroll, or
+// shrink or grow to show it whole.
+public enum PictureFit { Width, Window }
 
 // One row in the drives box. The row owns its disc's backup: the
 // state, the progress fill and the cancel all live here, and the row

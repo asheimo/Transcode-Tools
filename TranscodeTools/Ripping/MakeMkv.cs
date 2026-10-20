@@ -6,9 +6,11 @@
 // (BackupJob) and the info run (MakeMkvInfo); the rip joins them.
 //
 // Robot mode prints one record per line, "TYPE:field,field,...".
-// Every line except PRGV goes to the stage's log and is kept for
-// the caller to read. PRGV lines arrive many times a second, so
-// they drive a progress fraction instead of burying the log.
+// Every line except PRGV goes to the stage's log, is kept for the
+// caller to read, and can be watched as it arrives (onLine). PRGV
+// lines arrive many times a second, so they drive progress instead
+// of burying the log: the bar for the step running now and the bar
+// for the whole run, the two bars MakeMKV's own window shows.
 // ============================================================
 
 using System.Diagnostics;
@@ -23,6 +25,9 @@ public sealed class MakeMkvException : Exception
 {
     public MakeMkvException(string message) : base(message) { }
 }
+
+// Both of MakeMKV's progress bars, each 0..1.
+public readonly record struct MakeMkvProgress(double Current, double Total);
 
 public sealed class MakeMkvResult
 {
@@ -39,15 +44,18 @@ public sealed class MakeMkvResult
 public static class MakeMkv
 {
     // Runs makemkvcon with `args`, writes its output to `log` and returns
-    // what it printed. Throws MakeMkvException if it cannot be started,
-    // OperationCanceledException on cancel (the process is killed and
-    // waited for first, so the caller can clean up its files).
+    // what it printed. `onLine`, when given, sees each non-PRGV line as it
+    // arrives, on the thread reading MakeMKV's output. Throws
+    // MakeMkvException if it cannot be started, OperationCanceledException
+    // on cancel (the process is killed and waited for first, so the caller
+    // can clean up its files).
     public static async Task<MakeMkvResult> RunAsync(
         string makeMkvPath,
         IReadOnlyList<string> args,
         StreamWriter log,
-        IProgress<double>? progress,
-        CancellationToken token)
+        IProgress<MakeMkvProgress>? progress,
+        CancellationToken token,
+        Action<string>? onLine = null)
     {
         var psi = new ProcessStartInfo
         {
@@ -76,8 +84,8 @@ public static class MakeMkv
 
             if (line.StartsWith("PRGV:", StringComparison.Ordinal))
             {
-                if (progress != null && TryReadProgress(line, out var fraction))
-                    progress.Report(fraction);
+                if (progress != null && TryReadProgress(line, out var bars))
+                    progress.Report(bars);
                 return;
             }
 
@@ -85,6 +93,7 @@ public static class MakeMkv
             {
                 log.WriteLine(line);
                 result.Lines.Add(line);
+                onLine?.Invoke(line);
 
                 if (line.StartsWith("MSG:", StringComparison.Ordinal))
                 {
@@ -136,15 +145,19 @@ public static class MakeMkv
             ? $"MakeMKV exited with code {result.ExitCode}: {result.LastMessage}"
             : $"MakeMKV exited with code {result.ExitCode}.");
 
-    // PRGV:current,total,max -- the total bar is the whole run.
-    private static bool TryReadProgress(string line, out double fraction)
+    // PRGV:current,total,max -- current is the bar for the step running now
+    // (in a rip, the file being saved), total the bar for the whole run.
+    private static bool TryReadProgress(string line, out MakeMkvProgress bars)
     {
-        fraction = 0;
+        bars = default;
         var parts = line["PRGV:".Length..].Split(',');
         if (parts.Length != 3) return false;
-        if (!long.TryParse(parts[1], out var total) || !long.TryParse(parts[2], out var max)) return false;
+        if (!long.TryParse(parts[0], out var current) ||
+            !long.TryParse(parts[1], out var total) ||
+            !long.TryParse(parts[2], out var max)) return false;
         if (max <= 0) return false;
-        fraction = Math.Clamp((double)total / max, 0, 1);
+        bars = new MakeMkvProgress(Math.Clamp((double)current / max, 0, 1),
+                                   Math.Clamp((double)total   / max, 0, 1));
         return true;
     }
 

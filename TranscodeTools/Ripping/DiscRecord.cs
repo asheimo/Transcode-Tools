@@ -40,6 +40,20 @@ public sealed class DiscRecord
     [JsonIgnore]
     public string RipFolder { get; set; } = "";
 
+    // The log folder of the last Start run, Logs\<timestamp>\<DISC>\,
+    // holding its info.log and rip.log. Naming adds naming.log here.
+    public string? RunLogFolder { get; set; }
+
+    // Every .mkv the last finished rip wrote, kept as it stands now: a
+    // file renamed in naming carries its new name, a deleted one stays on
+    // the list flagged Deleted. Null until a rip finishes, so the jobs
+    // list can tell a finished rip from one that stopped part way.
+    public List<RipFileRecord>? RipFiles { get; set; }
+
+    // Set when the disc is marked complete in the naming step, cleared by
+    // Edit. Only this makes a disc Complete; the app never infers it.
+    public bool Complete { get; set; }
+
     public List<TitleRecord>  Titles  { get; set; } = new();
     public List<ScreenRecord> Screens { get; set; } = new();
 }
@@ -81,7 +95,7 @@ public sealed class TitleRecord
 
     public string Note { get; set; } = "";
 
-    // The name the user typed. Empty until named.
+    // The name the file was given, without ".mkv". Empty until named.
     public string Name { get; set; } = "";
 }
 
@@ -89,6 +103,15 @@ public sealed class TitleFlags
 {
     public bool PlayAll      { get; set; }
     public bool NoMenuButton { get; set; }
+    public bool Deleted      { get; set; }   // its file was deleted in the naming step
+}
+
+// One file the rip wrote.
+public sealed class RipFileRecord
+{
+    public string Name    { get; set; } = "";   // current file name, with ".mkv"
+    public long   Bytes   { get; set; }         // size when the rip wrote it
+    public bool   Deleted { get; set; }         // deleted in the naming step
 }
 
 // Identifies one button on one screen: the IFO and menu program chain

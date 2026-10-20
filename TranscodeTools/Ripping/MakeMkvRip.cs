@@ -18,6 +18,13 @@
 // folder is created here, and success is the exit code; which files
 // exist is the binder's business.
 //
+// Progress names the file being saved: (2/6) and both of MakeMKV's
+// bars. MEASURED (MakeMKV 1.18.3, THE_CENTENNIAL rip.log 2026-10-20):
+// the rip prints MSG:5014 "Saving %1 titles into directory %2" once, with
+// the file count as its first parameter, then for each file, numbered
+// from 0, PRGC:5057 "Analyzing seamless segments" and PRGC:5017 "Saving
+// to MKV file".
+//
 // The rip only starts into a folder with no .mkv in it (RipView asks
 // before overwriting old rips and deletes them on Yes), so on failure
 // or cancel every .mkv there is this run's, and they are deleted: a half-written rip left behind
@@ -29,9 +36,16 @@ using System.Text;
 
 namespace TranscodeTools;
 
+// Where a rip is: file `File` of `Files` (0 of 0 until MakeMKV has said),
+// with MakeMKV's bar for that file and for the whole rip, each 0..1.
+public sealed record RipProgress(int File, int Files, double Current, double Total);
+
 public static class MakeMkvRip
 {
     public const string LogFileName = "rip.log";
+
+    private const string SavingTitlesMessage = "5014";
+    private static readonly string[] FileProgressCodes = { "5057", "5017" };
 
     // Rips the ISO into `ripFolder` and binds the record's titles to the
     // files. Throws MakeMkvException on failure, OperationCanceledException
@@ -42,7 +56,7 @@ public static class MakeMkvRip
         string ripFolder,
         string logPath,
         DiscRecord record,
-        IProgress<double> progress,
+        IProgress<RipProgress> progress,
         CancellationToken token)
     {
         Directory.CreateDirectory(ripFolder);
@@ -65,7 +79,27 @@ public static class MakeMkvRip
                 "-r", "--noscan", $"--minlength={MakeMkvInfo.MinLength}", "--progress=-same",
                 "mkv", $"iso:{isoPath}", "all", ripFolder,
             };
-            var result = await MakeMkv.RunAsync(makeMkvPath, args, log, progress, token);
+            // Both are written by the thread reading MakeMKV's output (OnLine)
+            // and read on the same thread when a PRGV line reports progress.
+            int file = 0, files = 0;
+            void OnLine(string line)
+            {
+                if (line.StartsWith("MSG:", StringComparison.Ordinal))
+                {
+                    var fields = RobotLine.Split(line["MSG:".Length..]);
+                    if (fields.Count > 5 && fields[0] == SavingTitlesMessage && int.TryParse(fields[5], out var count))
+                        files = count;
+                }
+                else if (line.StartsWith("PRGC:", StringComparison.Ordinal))
+                {
+                    var fields = RobotLine.Split(line["PRGC:".Length..]);
+                    if (fields.Count > 1 && FileProgressCodes.Contains(fields[0]) && int.TryParse(fields[1], out var index))
+                        file = index + 1;
+                }
+            }
+            var bars = new Relay<MakeMkvProgress>(p => progress.Report(new RipProgress(file, files, p.Current, p.Total)));
+
+            var result = await MakeMkv.RunAsync(makeMkvPath, args, log, bars, token, OnLine);
 
             if (result.ExitCode != 0)
                 throw MakeMkv.ExitFailure(result);
@@ -76,7 +110,14 @@ public static class MakeMkvRip
                 log.WriteLine(line);
 
             log.WriteLine();
-            log.WriteLine($"Rip complete: {record.Titles.Count(t => t.Bound)} of {record.Titles.Count} titles bound");
+            // Listed after binding, so unclaimed files carry their prefix.
+            record.RipFiles = Directory.GetFiles(ripFolder, "*.mkv")
+                .Select(f => new FileInfo(f))
+                .OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
+                .Select(f => new RipFileRecord { Name = f.Name, Bytes = f.Length })
+                .ToList();
+            log.WriteLine($"Rip complete: {record.Titles.Count(t => t.Bound)} of {record.Titles.Count} titles bound, " +
+                          $"{record.RipFiles.Count} file(s) written");
             succeeded = true;
         }
         catch (OperationCanceledException)
@@ -96,6 +137,13 @@ public static class MakeMkvRip
             if (!succeeded)
                 DeletePartialRips(ripFolder, log);
         }
+    }
+
+    // Passes each report straight on, on the reporting thread. The caller's
+    // own IProgress takes it to the UI thread.
+    private sealed class Relay<T>(Action<T> report) : IProgress<T>
+    {
+        public void Report(T value) => report(value);
     }
 
     private static void DeletePartialRips(string ripFolder, StreamWriter log)

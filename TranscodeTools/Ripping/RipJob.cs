@@ -3,12 +3,14 @@
 // ------------------------------------------------------------
 // One row in the jobs list, and the work behind it.
 //
-// A row is added when a disc's backup completes, and waits with a
-// Start button until the IFO read is started from it. The read uses
-// the backup ISO, so Drive is only where the disc was backed up from.
-// The jobs list is also rebuilt from disk when a Destination loads
-// (see RipView.RebuildJobs), and every row keeps Start so a read can
-// be run again.
+// One row per disc on the Destination: added when a disc's backup
+// completes, and rebuilt from disk when a Destination loads (see
+// RipView.RebuildJobs). Its Step is the next step in the disc's chain:
+// Analyse, Info, Rip, Naming, then Complete. Its button reads Start
+// while Analyse is next, Continue after that, and Open on a complete
+// disc; a separate start-over button runs the chain again from Analyse
+// while the backup ISO is there. The work uses the backup ISO, so Drive
+// is only where the disc was backed up from.
 //
 // A job outlives the drive it started from, which is why it is its
 // own object rather than state on the drive row. It runs off the UI
@@ -56,13 +58,35 @@ public sealed class RipJob : INotifyPropertyChanged
         Destination = destination;
     }
 
-    // The stage the job is in, or last ran: Analyse (the IFO read),
-    // Info (MakeMKV's title list), then Rip (the rip and binding).
-    private string _step = "Analyse";
-    public string Step
+    // While the job runs, the stage running now. Otherwise the next step
+    // in the chain, which is where Continue picks up.
+    private JobStep _step = JobStep.Analyse;
+    public JobStep Step
     {
         get => _step;
-        set { if (_step == value) return; _step = value; OnPropertyChanged(); }
+        set
+        {
+            if (_step == value) return;
+            _step = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(ActionText));
+            OnPropertyChanged(nameof(CanStartOver));
+        }
+    }
+
+    // Whether the backup ISO is still there. Only starting over needs it;
+    // a row stays once its ISO is deleted.
+    private bool _hasIso;
+    public bool HasIso
+    {
+        get => _hasIso;
+        set
+        {
+            if (_hasIso == value) return;
+            _hasIso = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(CanStartOver));
+        }
     }
 
     // What the job is doing now while it runs, and what came of it when
@@ -93,14 +117,23 @@ public sealed class RipJob : INotifyPropertyChanged
             OnPropertyChanged();
             OnPropertyChanged(nameof(IsRunning));
             OnPropertyChanged(nameof(ActionText));
+            OnPropertyChanged(nameof(CanStartOver));
         }
     }
 
     public bool IsRunning => State == JobState.Running;
 
-    // The row's button: Cancel while running, Start otherwise. A finished
-    // row keeps Start so its read can be run again.
-    public string ActionText => State == JobState.Running ? "Cancel" : "Start";
+    // The row's button: Cancel while running, Start while Analyse is next,
+    // Continue once the chain is under way, Open on a complete disc.
+    public string ActionText =>
+        IsRunning                  ? "Cancel"
+        : Step == JobStep.Analyse  ? "Start"
+        : Step == JobStep.Complete ? "Open"
+        :                            "Continue";
+
+    // The start-over button shows once there is something to start over:
+    // a row past Analyse that is not running and still has its ISO.
+    public bool CanStartOver => !IsRunning && Step != JobStep.Analyse && HasIso;
 
     public CancellationToken Token => _cancel?.Token ?? CancellationToken.None;
 
@@ -133,6 +166,11 @@ public sealed class RipJob : INotifyPropertyChanged
 }
 
 public enum JobState { Ready, Running, Finished }
+
+// The steps of a disc's chain after its backup, in order. Analyse, Info
+// and Rip run from the job row; Naming is done in the title list.
+// Complete: marked complete in the naming step (DiscRecord.Complete).
+public enum JobStep { Analyse, Info, Rip, Naming, Complete }
 
 public static class DiscAnalysis
 {

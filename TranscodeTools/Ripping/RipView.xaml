@@ -3,16 +3,23 @@
      Rip mode's content. Shown by MainWindow in place of the shared
      Remux/Transcode layout when the "Rip" mode button is checked.
 
-     Layout:
-       Destination line (full width)
-       drives box            |  jobs in flight
-       left column (270)     |  chip strip (fixed height)
-         discs -> disc titles|  menu picture
+     Layout, top to bottom:
+       Destination line  |  Hide complete discs
+       drives box        |  disc list (the jobs list)
+       chip strip ................... Fit: Width / Window
+       menu picture
+       the selected disc's titles
        status line
 
-     The drives/jobs band and the main row each have their own
-     splitter, so the drives box is sized independently of the disc
-     column below it.
+     Splitters sit between the top band and the picture, and between
+     the picture and the titles, so either can be given more of the
+     window's height. The top band has its own column splitter, which
+     moves the Destination line with the drives box, so the two tables
+     start and end on the same lines.
+
+     The picture scales to its space, up or down, keeping its shape.
+     Fit Width fills the width and scrolls when the picture is taller
+     than its space; Fit Window always shows the whole picture.
 
      A drive row's button reads Backup, Cancel, Eject or Log by the
      row's backup state; the row fills green with the backup's
@@ -27,18 +34,42 @@
              Unloaded="RipView_Unloaded">
 
     <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility"/>
+        <local:InverseBoolConverter x:Key="InverseBool"/>
+
         <!-- Right-click menu on a disc row. x:Shared="False" gives each row
-             its own instance; one shared ContextMenu can only have one parent. -->
-        <ContextMenu x:Key="DiscRowMenu" x:Shared="False">
+             its own instance; one shared ContextMenu can only have one parent.
+             Start Over is the same as the row's start-over button. -->
+        <ContextMenu x:Key="JobRowMenu" x:Shared="False">
             <MenuItem Header="Open Folder in Explorer" Click="OpenDiscFolder_Click"/>
+            <MenuItem Header="Start Over"
+                      IsEnabled="{Binding CanStartOver}"
+                      Click="StartOver_Click"/>
         </ContextMenu>
 
-        <!-- Disc rows: the theme's ListViewItem style plus the right-click menu.
-             BasedOn keeps the theme template; without it this style would
-             replace it. -->
-        <Style x:Key="DiscRowStyle" TargetType="ListViewItem"
-               BasedOn="{StaticResource {x:Type ListViewItem}}">
-            <Setter Property="ContextMenu" Value="{StaticResource DiscRowMenu}"/>
+        <!-- Right-click menu on a title row -->
+        <ContextMenu x:Key="TitleRowMenu" x:Shared="False">
+            <MenuItem Header="Play in MPV" Click="PlayInMpv_Click"/>
+        </ContextMenu>
+
+        <!-- Title rows: the theme's DataGridRow style, the right-click
+             menu, the row's note as its tooltip, and selection that follows
+             the keyboard into the row's Delete box, so the row's menu
+             screen shows while it is being worked on. -->
+        <Style x:Key="TitleRowStyle" TargetType="DataGridRow"
+               BasedOn="{StaticResource {x:Type DataGridRow}}">
+            <Setter Property="ContextMenu" Value="{StaticResource TitleRowMenu}"/>
+            <Setter Property="ToolTip" Value="{Binding Note}"/>
+            <EventSetter Event="PreviewGotKeyboardFocus" Handler="TitleRow_PreviewGotKeyboardFocus"/>
+        </Style>
+
+        <!-- Column header and cell text centred, for Runtime and Delete -->
+        <Style x:Key="CenteredColumnHeader" TargetType="DataGridColumnHeader"
+               BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+        </Style>
+        <Style x:Key="CenteredCellText" TargetType="TextBlock">
+            <Setter Property="HorizontalAlignment" Value="Center"/>
         </Style>
 
         <!-- Three-dot grip, same look as the main window's splitter -->
@@ -91,6 +122,7 @@
 
         <Style x:Key="JobRowStyle" TargetType="ListViewItem"
                BasedOn="{StaticResource {x:Type ListViewItem}}">
+            <Setter Property="ContextMenu" Value="{StaticResource JobRowMenu}"/>
             <Style.Triggers>
                 <DataTrigger Binding="{Binding IsError}" Value="True">
                     <Setter Property="Background" Value="{x:Static local:RipColors.FailedRow}"/>
@@ -137,51 +169,59 @@
     </UserControl.Resources>
 
     <Grid>
-        <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="270" MinWidth="180"/>
-            <ColumnDefinition Width="8"/>
-            <ColumnDefinition Width="*" MinWidth="240"/>
-        </Grid.ColumnDefinitions>
         <Grid.RowDefinitions>
-            <RowDefinition Height="32"/>                    <!-- Destination -->
-            <RowDefinition Height="110" MinHeight="70"/>    <!-- Drives | jobs -->
+            <RowDefinition Height="150" MinHeight="110"/>   <!-- Destination | hide; drives | discs -->
             <RowDefinition Height="8"/>                     <!-- Splitter -->
-            <RowDefinition Height="*" MinHeight="180"/>     <!-- Left column | chips + picture -->
+            <RowDefinition Height="*" MinHeight="180"/>     <!-- Chips + picture -->
+            <RowDefinition Height="8"/>                     <!-- Splitter -->
+            <RowDefinition Height="200" MinHeight="120"/>   <!-- Selected disc's titles -->
             <RowDefinition Height="Auto"/>                  <!-- Status -->
         </Grid.RowDefinitions>
 
-        <!-- Destination line: same picker design as Input/Output Directory -->
-        <Grid Grid.Row="0" Grid.ColumnSpan="3">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
-            <Button Grid.Column="0"
-                    Content="Destination"
-                    Style="{StaticResource FlatButton}"
-                    Width="130"
-                    Margin="0,0,6,0"
-                    Click="DestinationButton_Click"/>
-            <ComboBox Grid.Column="1"
-                      x:Name="DestinationBox"
-                      IsEditable="True"
-                      IsReadOnly="True"
-                      SelectionChanged="DestinationBox_SelectionChanged"/>
-        </Grid>
-
-        <!-- Drives | jobs band: its own columns and splitter, so the drives
-             box is sized independently of the disc column below -->
-        <Grid Grid.Row="1" Grid.ColumnSpan="3" Margin="0,8,0,0">
+        <!-- Top band: two columns and one splitter -->
+        <Grid Grid.Row="0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="32"/>   <!-- Destination | Hide complete discs -->
+                <RowDefinition Height="8"/>
+                <RowDefinition Height="*"/>    <!-- Drives | discs -->
+            </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="350" MinWidth="250"/>
                 <ColumnDefinition Width="8"/>
                 <ColumnDefinition Width="*" MinWidth="240"/>
             </Grid.ColumnDefinitions>
 
+            <!-- Destination line: same picker design as Input/Output Directory,
+                 with the button sized to its text -->
+            <Grid Grid.Row="0" Grid.Column="0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Button Grid.Column="0"
+                        Content="Destination"
+                        Style="{StaticResource FlatButton}"
+                        Margin="0,0,6,0"
+                        Click="DestinationButton_Click"/>
+                <ComboBox Grid.Column="1"
+                          x:Name="DestinationBox"
+                          IsEditable="True"
+                          IsReadOnly="True"
+                          SelectionChanged="DestinationBox_SelectionChanged"/>
+            </Grid>
+
+            <!-- Filters complete discs out of the list below. Saved in settings. -->
+            <CheckBox Grid.Row="0" Grid.Column="2"
+                      x:Name="HideCompleteCheck"
+                      Content="Hide complete discs"
+                      HorizontalAlignment="Left"
+                      Checked="HideComplete_Changed"
+                      Unchecked="HideComplete_Changed"/>
+
             <!-- Drives box. The button stays visible on every row; it is
                  disabled only for a drive with no disc, and its tooltip
                  says what it will do or why it cannot. -->
-            <ListView Grid.Column="0"
+            <ListView Grid.Row="2" Grid.Column="0"
                       x:Name="DriveList"
                       ItemContainerStyle="{StaticResource DriveRowStyle}"
                       ScrollViewer.VerticalScrollBarVisibility="Auto">
@@ -206,7 +246,7 @@
                 </ListView.View>
             </ListView>
 
-            <GridSplitter Grid.Column="1"
+            <GridSplitter Grid.Column="1" Grid.RowSpan="3"
                           HorizontalAlignment="Stretch"
                           VerticalAlignment="Stretch"
                           ResizeDirection="Columns"
@@ -214,11 +254,16 @@
                           Background="Transparent"
                           Template="{StaticResource GripSplitter}"/>
 
-            <!-- Jobs: one row per backed-up disc, rebuilt from disk when a
-                 Destination loads. Start runs the IFO read and stays on the
-                 row so it can be run again; Cancel stops a running read. -->
-            <ListView Grid.Column="2"
+            <!-- Discs: one row per disc on the Destination, rebuilt from disk
+                 when a Destination loads. Selecting a row does nothing more
+                 than select it. Step is the disc's next step. The button reads
+                 Start, then Continue (at Naming it lists the disc's titles
+                 below), Open on a complete disc (its titles, read-only), and
+                 Cancel while running. The start-over button and
+                 the right-click menu run the chain again from Analyse. -->
+            <ListView Grid.Row="2" Grid.Column="2"
                       x:Name="JobList"
+                      SelectionMode="Single"
                       ItemContainerStyle="{StaticResource JobRowStyle}"
                       ScrollViewer.VerticalScrollBarVisibility="Auto">
                 <ListView.View>
@@ -227,7 +272,7 @@
                                         DisplayMemberBinding="{Binding Disc, TargetNullValue=''}"/>
                         <GridViewColumn Header="Step" Width="90"
                                         DisplayMemberBinding="{Binding Step, TargetNullValue=''}"/>
-                        <GridViewColumn Header="Status" Width="230">
+                        <GridViewColumn Header="Status" Width="195">
                             <GridViewColumn.CellTemplate>
                                 <DataTemplate>
                                     <TextBlock Style="{StaticResource JobStatusText}"
@@ -236,13 +281,24 @@
                                 </DataTemplate>
                             </GridViewColumn.CellTemplate>
                         </GridViewColumn>
-                        <GridViewColumn Header="" Width="90">
+                        <!-- Start / Continue / Cancel, with the start-over button
+                             beside it once a row is past Analyse and not running -->
+                        <GridViewColumn Header="" Width="125">
                             <GridViewColumn.CellTemplate>
                                 <DataTemplate>
-                                    <Button Content="{Binding ActionText}"
-                                            Style="{StaticResource FlatButton}"
-                                            Padding="12,2"
-                                            Click="JobAction_Click"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button Content="{Binding ActionText}"
+                                                Style="{StaticResource FlatButton}"
+                                                Padding="12,2"
+                                                Click="JobAction_Click"/>
+                                        <Button Content="&#x21BA;"
+                                                Style="{StaticResource FlatButton}"
+                                                Padding="8,2"
+                                                Margin="4,0,0,0"
+                                                ToolTip="Start over"
+                                                Visibility="{Binding CanStartOver, Converter={StaticResource BoolToVisibility}}"
+                                                Click="StartOver_Click"/>
+                                    </StackPanel>
                                 </DataTemplate>
                             </GridViewColumn.CellTemplate>
                         </GridViewColumn>
@@ -251,10 +307,8 @@
             </ListView>
         </Grid>
 
-        <!-- Splitter between the drives/jobs band and the row below.
-             The two boxes share the band's height, so a machine with
-             several drives can be given more of it. -->
-        <GridSplitter Grid.Row="2" Grid.ColumnSpan="3"
+        <!-- Splitter between the drives/jobs band and the picture -->
+        <GridSplitter Grid.Row="1"
                       HorizontalAlignment="Stretch"
                       VerticalAlignment="Stretch"
                       ResizeDirection="Rows"
@@ -262,108 +316,68 @@
                       Background="Transparent"
                       Template="{StaticResource GripSplitterH}"/>
 
-        <!-- Splitter for the disc column and the picture side -->
-        <GridSplitter Grid.Row="3" Grid.Column="1"
-                      Margin="0,8,0,0"
-                      HorizontalAlignment="Stretch"
-                      VerticalAlignment="Stretch"
-                      ResizeDirection="Columns"
-                      ResizeBehavior="PreviousAndNext"
-                      Background="Transparent"
-                      Template="{StaticResource GripSplitter}"/>
-
-        <!-- Left column: disc list, switching to the selected disc's titles -->
-        <Grid Grid.Row="3" Grid.Column="0" Margin="0,8,0,0">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="*"/>
-            </Grid.RowDefinitions>
-
-            <!-- Shown only while a disc's titles are listed -->
-            <Grid x:Name="DiscTitlesHeader" Grid.Row="0"
-                  Margin="0,0,0,6"
-                  Visibility="Collapsed">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-                <Button Grid.Column="0"
-                        Content="Back to discs"
-                        Style="{StaticResource FlatButton}"
-                        Padding="8,3"
-                        Margin="0,0,8,0"
-                        Click="BackToDiscs_Click"/>
-                <TextBlock Grid.Column="1"
-                           x:Name="SelectedDiscName"
-                           Foreground="{DynamicResource ForegroundColor}"
-                           FontSize="13"
-                           FontWeight="SemiBold"
-                           VerticalAlignment="Center"
-                           TextTrimming="CharacterEllipsis"/>
-            </Grid>
-
-            <ListView Grid.Row="1"
-                      x:Name="DiscList"
-                      ItemContainerStyle="{StaticResource DiscRowStyle}"
-                      ScrollViewer.VerticalScrollBarVisibility="Auto"
-                      SelectionChanged="DiscList_SelectionChanged">
-                <ListView.View>
-                    <GridView>
-                        <GridViewColumn Header="Disc" Width="250"
-                                        DisplayMemberBinding="{Binding Name, TargetNullValue=''}"/>
-                    </GridView>
-                </ListView.View>
-            </ListView>
-
-            <!-- One line per disc title: number, runtime, filename -->
-            <ListView Grid.Row="1"
-                      x:Name="TitleList"
-                      Visibility="Collapsed"
-                      ScrollViewer.VerticalScrollBarVisibility="Auto"
-                      SelectionChanged="TitleList_SelectionChanged">
-                <ListView.View>
-                    <GridView>
-                        <GridViewColumn Header="#"       Width="36"
-                                        DisplayMemberBinding="{Binding Number}"/>
-                        <GridViewColumn Header="Runtime" Width="70"
-                                        DisplayMemberBinding="{Binding Duration, TargetNullValue=''}"/>
-                        <GridViewColumn Header="File"    Width="150"
-                                        DisplayMemberBinding="{Binding FileName, TargetNullValue=''}"/>
-                    </GridView>
-                </ListView.View>
-            </ListView>
-        </Grid>
-
-        <!-- Right side: chip strip above the menu picture -->
-        <Grid Grid.Row="3" Grid.Column="2" Margin="0,8,0,0">
+        <!-- Chip strip above the menu picture. Kept in one row with the
+             picture so the splitters on either side resize the picture,
+             never the fixed-height strip. -->
+        <Grid Grid.Row="2">
             <Grid.RowDefinitions>
                 <RowDefinition Height="32"/>   <!-- Chip strip: fixed so the picture never moves -->
                 <RowDefinition Height="6"/>
                 <RowDefinition Height="*"/>    <!-- Picture -->
             </Grid.RowDefinitions>
 
-            <!-- One chip per source screen, in the order the screens were found -->
-            <ScrollViewer Grid.Row="0"
-                          HorizontalScrollBarVisibility="Auto"
-                          VerticalScrollBarVisibility="Disabled">
-                <ItemsControl x:Name="ChipStrip">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate>
-                            <StackPanel Orientation="Horizontal"/>
-                        </ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate>
-                            <RadioButton Style="{StaticResource ChipRadio}"
-                                         GroupName="ScreenChips"
-                                         Content="{Binding Label}"
-                                         ToolTip="{Binding ToolTip}"
-                                         IsChecked="{Binding IsSelected, Mode=TwoWay}"
-                                         Checked="Chip_Checked"/>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-            </ScrollViewer>
+            <Grid Grid.Row="0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- One chip per source screen, in the order the screens were found -->
+                <ScrollViewer Grid.Column="0"
+                              HorizontalScrollBarVisibility="Auto"
+                              VerticalScrollBarVisibility="Disabled">
+                    <ItemsControl x:Name="ChipStrip">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal"/>
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <RadioButton Style="{StaticResource ChipRadio}"
+                                             GroupName="ScreenChips"
+                                             Content="{Binding Label}"
+                                             ToolTip="{Binding ToolTip}"
+                                             IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                             Checked="Chip_Checked"/>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+
+                <!-- How the picture uses its space. Saved in the app's
+                     settings so Rip opens the way it was left. -->
+                <StackPanel Grid.Column="1"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center"
+                            Margin="12,0,0,0">
+                    <TextBlock Text="Fit:"
+                               Foreground="{DynamicResource SubtleForeground}"
+                               FontSize="13"
+                               VerticalAlignment="Center"
+                               Margin="0,0,8,0"/>
+                    <RadioButton x:Name="FitWidthRadio"
+                                 Content="Width"
+                                 GroupName="PictureFit"
+                                 Margin="0,0,12,0"
+                                 Checked="FitRadio_Checked"/>
+                    <RadioButton x:Name="FitWindowRadio"
+                                 Content="Window"
+                                 GroupName="PictureFit"
+                                 Margin="0"
+                                 Checked="FitRadio_Checked"/>
+                </StackPanel>
+            </Grid>
 
             <Border Grid.Row="2"
                     Background="{DynamicResource PanelBg}"
@@ -380,28 +394,186 @@
                                VerticalAlignment="Center"
                                Margin="24"/>
 
-                    <!-- The picture and the hotspot layer share one container, sized in
-                         code to the picture's own pixels (720 x 480 NTSC, 720 x 576 PAL),
-                         so button rectangles stay in source coordinates. The Viewbox
-                         scales the pair together: StretchDirection="DownOnly" shrinks
-                         it when space is short and never enlarges it. -->
-                    <Viewbox x:Name="PictureBox"
-                             Stretch="Uniform"
-                             StretchDirection="DownOnly"
-                             Visibility="Collapsed">
-                        <Grid x:Name="PictureFrame">
-                            <Image x:Name="MenuImage"
-                                   Stretch="Fill"
-                                   RenderOptions.BitmapScalingMode="HighQuality"/>
-                            <Canvas x:Name="HotspotLayer"/>
-                        </Grid>
-                    </Viewbox>
+                    <!-- The picture and the hotspot layer share one container,
+                         sized in code to the picture's own pixels (720 x 480
+                         NTSC, 720 x 576 PAL), so button rectangles stay in
+                         source coordinates. The Viewbox scales the pair
+                         together, up or down, keeping their shape.
+                         The ScrollViewer decides the fit: with vertical
+                         scrolling off it hands the Viewbox the whole space
+                         (Fit Window); with it on, the height is unlimited, so
+                         the Viewbox scales to the width alone (Fit Width). -->
+                    <ScrollViewer x:Name="PictureScroll"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  VerticalScrollBarVisibility="Auto"
+                                  Visibility="Collapsed">
+                        <Viewbox Stretch="Uniform"
+                                 StretchDirection="Both"
+                                 HorizontalAlignment="Center"
+                                 VerticalAlignment="Center">
+                            <Grid x:Name="PictureFrame">
+                                <Image x:Name="MenuImage"
+                                       Stretch="Fill"
+                                       RenderOptions.BitmapScalingMode="HighQuality"/>
+                                <Canvas x:Name="HotspotLayer"/>
+                            </Grid>
+                        </Viewbox>
+                    </ScrollViewer>
                 </Grid>
             </Border>
         </Grid>
 
+        <!-- Splitter between the picture and the list -->
+        <GridSplitter Grid.Row="3"
+                      HorizontalAlignment="Stretch"
+                      VerticalAlignment="Stretch"
+                      ResizeDirection="Rows"
+                      ResizeBehavior="PreviousAndNext"
+                      Background="Transparent"
+                      Template="{StaticResource GripSplitterH}"/>
+
+        <!-- The selected disc's titles -->
+        <Grid Grid.Row="4">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <!-- Shown only while a disc's titles are listed -->
+            <Grid x:Name="DiscTitlesHeader" Grid.Row="0"
+                  Margin="0,0,0,6"
+                  Visibility="Collapsed">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0"
+                           x:Name="SelectedDiscName"
+                           Foreground="{DynamicResource ForegroundColor}"
+                           FontSize="13"
+                           FontWeight="SemiBold"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis"/>
+                <!-- Applies every changed row at once: the typed names and the
+                     ticked Deletes. Enabled only while there is a change. On a
+                     complete disc it reads Edit and reopens the disc. -->
+                <Button Grid.Column="1"
+                        x:Name="ApplyButton"
+                        Content="Apply"
+                        Style="{StaticResource AccentButton}"
+                        Padding="16,3"
+                        IsEnabled="False"
+                        Click="Apply_Click"/>
+                <!-- Marks the disc complete. Disabled while there are changes
+                     not yet applied, and on a disc already complete. -->
+                <Button Grid.Column="2"
+                        x:Name="CompleteButton"
+                        Content="Complete"
+                        Style="{StaticResource AccentButton}"
+                        Padding="16,3"
+                        Margin="8,0,0,0"
+                        IsEnabled="False"
+                        Click="Complete_Click"/>
+            </Grid>
+
+            <!-- Shown while no disc is selected above, or for a disc not yet
+                 analysed -->
+            <TextBlock Grid.Row="1"
+                       x:Name="TitlesPlaceholder"
+                       Foreground="{DynamicResource SubtleForeground}"
+                       FontSize="13"
+                       TextWrapping="Wrap"
+                       TextAlignment="Center"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center"/>
+
+            <!-- One row per .mkv in the disc's rip folder: files bound to a
+                 disc title first, in title order, then files no title claims.
+                 The Name cell edits in place (one click or F2, Enter to keep,
+                 Esc to undo) and the Type dropdown sets Main title or a Plex
+                 extras type, unless the row's Delete box is ticked; then the
+                 Name cell's tooltip says to untick Delete. A click anywhere else in the
+                 row only selects it. Runtime and Delete are
+                 fixed-width and centred. -->
+            <DataGrid Grid.Row="1"
+                      x:Name="TitleList"
+                      Visibility="Collapsed"
+                      RowStyle="{StaticResource TitleRowStyle}"
+                      SelectionMode="Single"
+                      SelectionUnit="FullRow"
+                      ScrollViewer.VerticalScrollBarVisibility="Auto"
+                      BeginningEdit="TitleList_BeginningEdit"
+                      PreparingCellForEdit="TitleList_PreparingCellForEdit"
+                      CellEditEnding="TitleList_CellEditEnding"
+                      SelectionChanged="TitleList_SelectionChanged">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="#" Width="50" IsReadOnly="True"
+                                        Binding="{Binding Number}"/>
+                    <DataGridTextColumn Header="Runtime" Width="80" IsReadOnly="True" CanUserResize="False"
+                                        Binding="{Binding Runtime}"
+                                        HeaderStyle="{StaticResource CenteredColumnHeader}"
+                                        ElementStyle="{StaticResource CenteredCellText}"/>
+                    <DataGridTextColumn Header="File" Width="260" IsReadOnly="True"
+                                        Binding="{Binding FileName}"/>
+                    <DataGridTextColumn x:Name="NameColumn" Header="Name" Width="*"
+                                        Binding="{Binding Name}"
+                                        EditingElementStyle="{StaticResource DataGridEditingTextBox}">
+                        <DataGridTextColumn.CellStyle>
+                            <Style TargetType="DataGridCell"
+                                   BasedOn="{StaticResource {x:Type DataGridCell}}">
+                                <!-- One click in a Name cell starts editing it -->
+                                <EventSetter Event="PreviewMouseLeftButtonDown"
+                                             Handler="NameCell_PreviewMouseLeftButtonDown"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Delete}" Value="True">
+                                        <Setter Property="ToolTip"
+                                                Value="{x:Static local:TitleNaming.UntickDeleteToEdit}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </DataGridTextColumn.CellStyle>
+                    </DataGridTextColumn>
+                    <!-- Main title or a Plex extras type. Empty until chosen;
+                         disabled on a row ticked for Delete and on a complete
+                         disc. -->
+                    <DataGridTemplateColumn Header="Type" Width="160" CanUserResize="False">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <ComboBox ItemsSource="{Binding TypeChoices}"
+                                          SelectedItem="{Binding Type, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                          DisplayMemberPath="Label"
+                                          Padding="6,1"
+                                          Margin="2,1">
+                                    <ComboBox.Style>
+                                        <Style TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
+                                            <Setter Property="IsEnabled" Value="{Binding CanEdit}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsReadOnly, RelativeSource={RelativeSource AncestorType=DataGrid}}" Value="True">
+                                                    <Setter Property="IsEnabled" Value="False"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </ComboBox.Style>
+                                </ComboBox>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTemplateColumn Header="Delete" Width="60" CanUserResize="False"
+                                            HeaderStyle="{StaticResource CenteredColumnHeader}">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <CheckBox IsChecked="{Binding Delete, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                          IsEnabled="{Binding IsReadOnly, RelativeSource={RelativeSource AncestorType=DataGrid}, Converter={StaticResource InverseBool}}"/>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                </DataGrid.Columns>
+            </DataGrid>
+        </Grid>
+
         <!-- Status line -->
-        <TextBlock Grid.Row="4" Grid.ColumnSpan="3"
+        <TextBlock Grid.Row="5"
                    x:Name="StatusText"
                    Foreground="{DynamicResource SubtleForeground}"
                    FontSize="12"

@@ -17,5 +17,6 @@
     <SolidColorBrush x:Key="RowSelectedBg"   Color="#1A4A7A"/>
     <SolidColorBrush x:Key="AccentColor"     Color="#4CA3F5"/>
     <SolidColorBrush x:Key="SeparatorColor"  Color="#3A3A3A"/>
+    <SolidColorBrush x:Key="MissingBg"       Color="#8B2323"/>
 
 </ResourceDictionary>

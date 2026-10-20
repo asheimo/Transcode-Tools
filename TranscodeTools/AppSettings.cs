@@ -194,6 +194,34 @@ public sealed class AppSettings
     public List<string> RecentDestinationFolders { get; set; } = new();
     public int RecentFolderHistorySize      { get; set; } = 6;
 
+    // ── Rip mode window ──────────────────────────────────────────────
+    // Rip mode remembers its window size; Remux and Transcode always open
+    // at the size set in MainWindow.xaml. The default is taller than those
+    // so the menu picture can fill the width with the title list below it.
+    // MainWindow shrinks it to fit the screen it is shown on.
+    public double RipWindowWidth  { get; set; } = 1000;
+    public double RipWindowHeight { get; set; } = 1150;
+
+    // How the menu picture uses its space (see RipView). Saved as text so
+    // settings.json reads "Width" / "Window" rather than a number.
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public PictureFit RipPictureFit { get; set; } = PictureFit.Width;
+
+    // Hides complete discs (every file named or deleted) from Rip mode's
+    // disc list. The rows are only filtered out of view.
+    public bool RipHideComplete { get; set; }
+
+    // When Rip mode deletes a disc's backup ISO: as soon as the rip and
+    // binding succeed (Rip), or when the disc is marked complete, after a
+    // confirmation (Naming). Set on the Rip tab of Preferences.
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public IsoDeleteAfter IsoDeleteAfter { get; set; } = IsoDeleteAfter.Naming;
+
+    // The Plex extras types left out of the naming list's Type dropdown,
+    // by suffix ("trailer"). Main title is always offered. Set on the Rip
+    // tab of Preferences.
+    public List<string> RipHiddenExtraTypes { get; set; } = new();
+
     // Prepends a path to the recent input/output/destination list,
     // deduplicates, and trims to RecentFolderHistorySize. Call after a
     // successful selection.
@@ -273,3 +301,5 @@ public sealed class AppSettings
         !string.IsNullOrWhiteSpace(MKVPropEdit_Path)  &&
         !string.IsNullOrWhiteSpace(MKVMerge_Path);
 }
+
+public enum IsoDeleteAfter { Rip, Naming }

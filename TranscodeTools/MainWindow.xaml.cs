@@ -67,6 +67,11 @@ public partial class MainWindow : Window
     private UserMode _mode = UserMode.Remux;
     private bool _isTranscodeMode => _mode == UserMode.Transcode;
 
+    // Remux and Transcode always open at the size set in MainWindow.xaml,
+    // read back in the constructor so the XAML stays the one place it is
+    // set. Rip has its own, remembered size (AppSettings.RipWindow*).
+    private Size _fileModeSize;
+
     // Known extras category suffixes — split on the LAST dash in the filename,
     // then check if what follows is one of these known types.
     // This fixes the original bug where filenames containing dashes
@@ -92,6 +97,7 @@ public partial class MainWindow : Window
         TranscodeAudioList.ItemsSource    = TranscodeAudioTracks;
         TranscodeSubtitleList.ItemsSource = TranscodeSubtitleTracks;
 
+        _fileModeSize = new Size(Width, Height);
         SelectStartupMode();
     }
 
@@ -122,11 +128,13 @@ public partial class MainWindow : Window
     {
         if (sender is not RadioButton { IsChecked: true } radio) return;
 
+        var previous = _mode;
         _mode = radio == RipRadio       ? UserMode.Rip
               : radio == TranscodeRadio ? UserMode.Transcode
               :                           UserMode.Remux;
 
         ApplyModeLayout();
+        ApplyModeWindowSize(previous);
 
         RemuxPanel.Visibility     = _isTranscodeMode ? Visibility.Collapsed : Visibility.Visible;
         TranscodePanel.Visibility = _isTranscodeMode ? Visibility.Visible   : Visibility.Collapsed;
@@ -184,6 +192,58 @@ public partial class MainWindow : Window
         RunSeparator.Visibility               = fileOnly;
         ClearInputHistoryMenuItem.Visibility  = fileOnly;
         ClearOutputHistoryMenuItem.Visibility = fileOnly;
+    }
+
+    // Rip mode has its own window size, remembered between runs; Remux and
+    // Transcode share the fixed size from the XAML. Only a switch into or
+    // out of Rip changes the size.
+    private void ApplyModeWindowSize(UserMode previous)
+    {
+        bool wasRip = previous == UserMode.Rip;
+        bool isRip  = _mode    == UserMode.Rip;
+        if (wasRip == isRip) return;
+
+        if (wasRip)
+        {
+            SaveRipWindowSize();
+            SetWindowSize(_fileModeSize);
+        }
+        else
+        {
+            SetWindowSize(new Size(AppSettings.Instance.RipWindowWidth, AppSettings.Instance.RipWindowHeight));
+        }
+    }
+
+    // A maximized or minimized window's own Width/Height is not the size it
+    // returns to, so RestoreBounds is saved instead.
+    private void SaveRipWindowSize()
+    {
+        var size = WindowState == WindowState.Normal ? new Size(Width, Height) : RestoreBounds.Size;
+        AppSettings.Instance.RipWindowWidth  = size.Width;
+        AppSettings.Instance.RipWindowHeight = size.Height;
+        AppSettings.Instance.Save();
+    }
+
+    // Shrinks the size to fit the usable area of the screen the window is
+    // on, and once the window is showing moves it up or left as needed so
+    // the whole window stays on that screen. Before it shows, CenterScreen
+    // places it.
+    private void SetWindowSize(Size size)
+    {
+        var area = MonitorWorkArea.For(this);
+        Width  = Math.Min(size.Width,  area.Width);
+        Height = Math.Min(size.Height, area.Height);
+
+        if (!IsLoaded) return;
+        Left = Math.Max(area.Left, Math.Min(Left, area.Right  - Width));
+        Top  = Math.Max(area.Top,  Math.Min(Top,  area.Bottom - Height));
+    }
+
+    protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+    {
+        if (_mode == UserMode.Rip)
+            SaveRipWindowSize();
+        base.OnClosing(e);
     }
 
     // ── Directory selection ──────────────────────────────────────────
@@ -286,7 +346,7 @@ public partial class MainWindow : Window
     // Scans the input directory for subfolders, skipping "Remux" and
     // "Transcode" which are used for settings files, not source material.
     // Regex to detect a (YYYY) year pattern anywhere in a folder name.
-    private static readonly Regex YearPattern = new(@"\(\d{4}\)", RegexOptions.Compiled);
+    internal static readonly Regex YearPattern = new(@"\(\d{4}\)", RegexOptions.Compiled);
 
     // Regex to detect an existing resolution suffix e.g. -1080p, -2160p, -480p, -720p, -4K
     private static readonly Regex ResolutionSuffix =
@@ -294,7 +354,7 @@ public partial class MainWindow : Window
 
     // Regex to detect TV episode naming: S01E01, S01E01E02, etc.
     // Used to skip episode files from title case correction.
-    private static readonly Regex EpisodePattern =
+    internal static readonly Regex EpisodePattern =
         new(@"\bS\d{2}E\d{2}\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private void LoadMovieFolders(string rootPath)
@@ -3101,7 +3161,7 @@ public partial class MainWindow : Window
     }
 
     // ── Helpers ──────────────────────────────────────────────────────
-    private static void TryLaunch(string exe, string arg)
+    internal static void TryLaunch(string exe, string arg)
     {
         try
         {

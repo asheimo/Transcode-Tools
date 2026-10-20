@@ -206,6 +206,7 @@ A lossless track must be used as the source when encoding to lossy, even when an
 - CPU encoding (x264/x265) — rough implementation next, followed by design discussion on how to handle encode method selection (NVENC vs QSV vs CPU) in the UI
 - Resolution dropdown (pending ffmpeg scaling)
 - Fallback hardware decoder revisit
+- Remux/Transcode window resizing — how the two views' layouts behave when the window is resized, and whether they should remember their size the way Rip mode does (they currently always open at 1000 × 820)
 - Code refactor/cleanup (Step 12)
 - Dark mode / Fluent polish (Step 12)
 - DataGrid conversion from ListView+GridView (Step 12)

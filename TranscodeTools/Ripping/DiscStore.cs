@@ -116,21 +116,10 @@ public static class DiscStore
 
         foreach (var folder in Directory.GetDirectories(root).OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
         {
-            var path = Path.Combine(folder, MenuFolderName, RecordFileName);
-            if (!File.Exists(path)) continue;
-
             try
             {
-                var disc = JsonSerializer.Deserialize<DiscRecord>(File.ReadAllText(path), JsonOptions);
-                if (disc == null)
-                {
-                    problems.Add($"{Path.GetFileName(folder)}: {RecordFileName} is empty");
-                    continue;
-                }
-
-                // Not stored: the rip folder is wherever the record was found.
-                disc.RipFolder = folder;
-                discs.Add(disc);
+                if (Read(folder) is { } disc)
+                    discs.Add(disc);
             }
             catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
             {
@@ -138,6 +127,25 @@ public static class DiscStore
             }
         }
         return discs;
+    }
+
+    // One disc's record, or null when its rip folder has none. Throws
+    // IOException, JsonException or UnauthorizedAccessException when the
+    // record is there but can't be read.
+    public static DiscRecord? Load(string destination, string discName) =>
+        Read(RipFolder(destination, discName));
+
+    private static DiscRecord? Read(string ripFolder)
+    {
+        var path = Path.Combine(ripFolder, MenuFolderName, RecordFileName);
+        if (!File.Exists(path)) return null;
+
+        var disc = JsonSerializer.Deserialize<DiscRecord>(File.ReadAllText(path), JsonOptions)
+                   ?? throw new JsonException($"{RecordFileName} is empty");
+
+        // Not stored: the rip folder is wherever the record was found.
+        disc.RipFolder = ripFolder;
+        return disc;
     }
 
     // Deletes a disc's record, for a disc being backed up again: a new

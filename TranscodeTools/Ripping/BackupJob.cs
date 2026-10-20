@@ -22,8 +22,8 @@
 // text is relied on. On failure or cancel the partial ISO is
 // deleted: left in ISO\ it would look like a finished backup.
 //
-// Runs off the UI thread. Progress is reported as a fraction 0..1
-// through IProgress<double>, created on the UI thread by the caller.
+// Runs off the UI thread. Progress is reported through
+// IProgress<MakeMkvProgress>, created on the UI thread by the caller.
 // ============================================================
 
 using System.IO;
@@ -42,7 +42,7 @@ public static class BackupJob
         string discName,
         string isoPath,
         string logPath,
-        IProgress<double> progress,
+        IProgress<MakeMkvProgress> progress,
         CancellationToken token)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(isoPath)!);

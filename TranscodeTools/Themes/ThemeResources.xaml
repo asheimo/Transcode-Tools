@@ -232,6 +232,14 @@
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
+        <!-- Disabled: faded, as CheckBox does, so it reads as unavailable.
+             AccentButton is based on this style and gets the same look. -->
+        <Style.Triggers>
+            <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.4"/>
+                <Setter Property="Cursor" Value="Arrow"/>
+            </Trigger>
+        </Style.Triggers>
     </Style>
 
     <Style x:Key="AccentButton" TargetType="Button" BasedOn="{StaticResource FlatButton}">
@@ -461,6 +469,28 @@
                             <Setter TargetName="contentPresenter" Property="Visibility" Value="Visible"/>
                             <Setter TargetName="editBorder"       Property="Visibility" Value="Collapsed"/>
                         </Trigger>
+                        <!-- Read-only editable box (the folder history pickers): the
+                             text part lets clicks through to the toggle button
+                             under it, so a click anywhere in the box opens the
+                             list, as dropdowns do in other applications. -->
+                        <MultiTrigger>
+                            <MultiTrigger.Conditions>
+                                <Condition Property="IsEditable" Value="true"/>
+                                <Condition Property="IsReadOnly" Value="true"/>
+                            </MultiTrigger.Conditions>
+                            <Setter TargetName="editBorder" Property="IsHitTestVisible" Value="false"/>
+                        </MultiTrigger>
+                        <!-- A folder picker with nothing chosen turns red so a
+                             missing folder is noticed before a job starts. -->
+                        <MultiTrigger>
+                            <MultiTrigger.Conditions>
+                                <Condition Property="IsEditable" Value="true"/>
+                                <Condition Property="IsReadOnly" Value="true"/>
+                                <Condition Property="Text"       Value=""/>
+                            </MultiTrigger.Conditions>
+                            <Setter TargetName="editBorder"   Property="Background" Value="{DynamicResource MissingBg}"/>
+                            <Setter TargetName="toggleButton" Property="Background" Value="{DynamicResource MissingBg}"/>
+                        </MultiTrigger>
                         <!-- Focus border highlight -->
                         <Trigger Property="IsKeyboardFocusWithin" Value="true">
                             <Setter TargetName="focusBorder" Property="BorderThickness" Value="1"/>
@@ -687,6 +717,138 @@
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
+    </Style>
+
+    <!-- ── DataGrid ──────────────────────────────────────────────────────
+         Styled to look like the ListView tables above. Aero2's DataGrid and
+         DataGridRow templates draw everything from their own properties
+         (TemplateBinding), so those two only need setters here. Aero2's
+         column header is drawn by its DataGridHeaderBorder chrome, which
+         ignores our colours, and its cell template has no padding, so
+         those two get full templates. Keys and gripper part names are
+         taken from Aero2.NormalColor.xaml (dotnet/wpf, release/8.0).
+         A column with CanUserResize="False" gets no resize grip. -->
+
+    <!-- Resize grip on a column header's edges: invisible, resize cursor -->
+    <Style x:Key="DataGridHeaderGripper" TargetType="{x:Type Thumb}">
+        <Setter Property="Width"      Value="8"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Cursor"     Value="SizeWE"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type Thumb}">
+                    <Border Padding="{TemplateBinding Padding}"
+                            Background="{TemplateBinding Background}"/>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style TargetType="{x:Type DataGrid}">
+        <Setter Property="Background"              Value="{DynamicResource PanelBg}"/>
+        <Setter Property="Foreground"              Value="{DynamicResource ForegroundColor}"/>
+        <Setter Property="BorderBrush"             Value="{DynamicResource BorderColor}"/>
+        <Setter Property="BorderThickness"         Value="1"/>
+        <Setter Property="FontSize"                Value="13"/>
+        <Setter Property="HeadersVisibility"       Value="Column"/>
+        <Setter Property="GridLinesVisibility"     Value="None"/>
+        <Setter Property="AutoGenerateColumns"     Value="False"/>
+        <Setter Property="CanUserAddRows"          Value="False"/>
+        <Setter Property="CanUserDeleteRows"       Value="False"/>
+        <Setter Property="CanUserReorderColumns"   Value="False"/>
+        <Setter Property="CanUserSortColumns"      Value="False"/>
+        <Setter Property="RowDetailsVisibilityMode" Value="Collapsed"/>
+    </Style>
+
+    <Style TargetType="{x:Type DataGridColumnHeader}">
+        <Setter Property="Background"                 Value="{DynamicResource HeaderBg}"/>
+        <Setter Property="Foreground"                 Value="{DynamicResource ForegroundColor}"/>
+        <Setter Property="BorderBrush"                Value="{DynamicResource BorderColor}"/>
+        <Setter Property="BorderThickness"            Value="0,0,1,1"/>
+        <Setter Property="Padding"                    Value="8,5"/>
+        <Setter Property="FontSize"                   Value="12"/>
+        <Setter Property="FontWeight"                 Value="SemiBold"/>
+        <Setter Property="HorizontalContentAlignment" Value="Left"/>
+        <Setter Property="VerticalContentAlignment"   Value="Center"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type DataGridColumnHeader}">
+                    <Grid>
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                Padding="{TemplateBinding Padding}"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                              TextElement.Foreground="{TemplateBinding Foreground}"
+                                              RecognizesAccessKey="True"
+                                              SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}"/>
+                        </Border>
+                        <Thumb x:Name="PART_LeftHeaderGripper"
+                               HorizontalAlignment="Left"
+                               Style="{StaticResource DataGridHeaderGripper}"/>
+                        <Thumb x:Name="PART_RightHeaderGripper"
+                               HorizontalAlignment="Right"
+                               Style="{StaticResource DataGridHeaderGripper}"/>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Rows: same divider, hover and selection colours as ListViewItem -->
+    <Style TargetType="{x:Type DataGridRow}">
+        <Setter Property="Background"      Value="Transparent"/>
+        <Setter Property="Foreground"      Value="{DynamicResource ForegroundColor}"/>
+        <Setter Property="BorderBrush"     Value="{DynamicResource RowDivider}"/>
+        <Setter Property="BorderThickness" Value="0,0,0,1"/>
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background" Value="{DynamicResource RowHoverBg}"/>
+            </Trigger>
+            <Trigger Property="IsSelected" Value="True">
+                <Setter Property="Background" Value="{DynamicResource RowSelectedBg}"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- Cells: transparent so the row's colour shows through, with the same
+         padding as a ListViewItem. Selection is shown on the row, so the
+         cell's own selected and focused colours are switched off. -->
+    <Style TargetType="{x:Type DataGridCell}">
+        <Setter Property="Background"        Value="Transparent"/>
+        <Setter Property="Foreground"        Value="{DynamicResource ForegroundColor}"/>
+        <Setter Property="BorderThickness"   Value="0"/>
+        <Setter Property="Padding"           Value="4,3"/>
+        <Setter Property="FocusVisualStyle"  Value="{x:Null}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type DataGridCell}">
+                    <Border Background="{TemplateBinding Background}"
+                            Padding="{TemplateBinding Padding}"
+                            SnapsToDevicePixels="True">
+                        <ContentPresenter VerticalAlignment="Center"
+                                          SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <Trigger Property="IsSelected" Value="True">
+                <Setter Property="Background" Value="Transparent"/>
+                <Setter Property="Foreground" Value="{DynamicResource ForegroundColor}"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- The text box a DataGridTextColumn swaps into a cell while it is
+         edited. The column's own default editing style is explicit, so the
+         app's TextBox style has to be named on the column to reach it. -->
+    <Style x:Key="DataGridEditingTextBox" TargetType="{x:Type TextBox}"
+           BasedOn="{StaticResource {x:Type TextBox}}">
+        <Setter Property="Padding"     Value="2,0"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentColor}"/>
     </Style>
 
     <Style TargetType="CheckBox">
