@@ -318,10 +318,12 @@
 
         <!-- Chip strip above the menu picture. Kept in one row with the
              picture so the splitters on either side resize the picture,
-             never the fixed-height strip. -->
+             never the fixed-height strip. The strip is tall enough for a
+             row of chips with its scroll bar under them, so a long row
+             scrolls without the bar cutting into the chips. -->
         <Grid Grid.Row="2">
             <Grid.RowDefinitions>
-                <RowDefinition Height="32"/>   <!-- Chip strip: fixed so the picture never moves -->
+                <RowDefinition Height="46"/>   <!-- Chip strip: fixed so the picture never moves -->
                 <RowDefinition Height="6"/>
                 <RowDefinition Height="*"/>    <!-- Picture -->
             </Grid.RowDefinitions>
@@ -334,6 +336,7 @@
 
                 <!-- One chip per source screen, in the order the screens were found -->
                 <ScrollViewer Grid.Column="0"
+                              VerticalAlignment="Top"
                               HorizontalScrollBarVisibility="Auto"
                               VerticalScrollBarVisibility="Disabled">
                     <ItemsControl x:Name="ChipStrip">
@@ -359,8 +362,8 @@
                      settings so Rip opens the way it was left. -->
                 <StackPanel Grid.Column="1"
                             Orientation="Horizontal"
-                            VerticalAlignment="Center"
-                            Margin="12,0,0,0">
+                            VerticalAlignment="Top"
+                            Margin="12,4,0,0">
                     <TextBlock Text="Fit:"
                                Foreground="{DynamicResource SubtleForeground}"
                                FontSize="13"

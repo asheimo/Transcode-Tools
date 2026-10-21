@@ -16,6 +16,12 @@
 //   26  the cell segments it covers, e.g. "1-5,6-9" (play-all check)
 //   27  the file name the rip will be written under (the binder's key)
 //
+// MSG:3027 lines name the titles MakeMKV skipped as copies of another:
+// "Title #36 in VTS 10 is equal to title #35 and was skipped", with the
+// title set, the kept title and the skipped title as its parameters. A
+// skipped title has no TINFO row; it gets SameAs set to the kept title,
+// so the buttons that name it can be shown on the kept title's file.
+//
 // Rows are joined to the disc's titles by field 24, never by row
 // number: --minlength can drop rows and shift the numbering. A title
 // MakeMKV does not list, or a row naming a title the disc does not
@@ -47,6 +53,8 @@ public static class MakeMkvInfo
     public const string LogFileName = "info.log";
 
     private const int CompositeToleranceSeconds = 2;
+
+    private const string SkippedAsEqualMessage = "3027";
 
     // One title as MakeMKV lists it.
     public sealed record InfoTitle(
@@ -93,7 +101,9 @@ public static class MakeMkvInfo
             if (titles.Count == 0)
                 throw new MakeMkvException("MakeMKV listed no titles.");
 
-            var problems = Apply(record, titles);
+            var problems = new List<string>();
+            var skipped  = ParseSkipped(result.Lines, problems);
+            problems.AddRange(Apply(record, titles, skipped));
 
             log.WriteLine();
             foreach (var problem in problems)
@@ -157,10 +167,35 @@ public static class MakeMkvInfo
         return titles;
     }
 
+    // Reads the MSG:3027 lines into skipped title -> the title MakeMKV kept
+    // in its place. The parameters are the title set, the kept title and
+    // the skipped title, the titles written "#35". A 3027 line that can't
+    // be read that way is added to `problems`.
+    public static Dictionary<int, int> ParseSkipped(IEnumerable<string> lines, List<string> problems)
+    {
+        var skipped = new Dictionary<int, int>();
+        foreach (var line in lines)
+        {
+            if (!line.StartsWith("MSG:", StringComparison.Ordinal)) continue;
+
+            var fields = RobotLine.Split(line["MSG:".Length..]);
+            if (fields[0] != SkippedAsEqualMessage) continue;
+
+            if (fields.Count >= 8 &&
+                int.TryParse(fields[6].TrimStart('#'), out var kept) &&
+                int.TryParse(fields[7].TrimStart('#'), out var copy))
+                skipped[copy] = kept;
+            else
+                problems.Add($"MakeMKV message {SkippedAsEqualMessage} could not be read: {line}");
+        }
+        return skipped;
+    }
+
     // Fills each record title from the row for its title number, then
-    // runs the chapter gate and the play-all check. Returns a line for
-    // every title or row that could not be joined.
-    private static List<string> Apply(DiscRecord record, List<InfoTitle> titles)
+    // runs the chapter gate and the play-all check. A title MakeMKV skipped
+    // as a copy gets SameAs instead of a row. Returns a line for every
+    // title or row that could not be joined, and every skipped title.
+    private static List<string> Apply(DiscRecord record, List<InfoTitle> titles, Dictionary<int, int> skipped)
     {
         var problems = new List<string>();
         var bySource = new Dictionary<int, InfoTitle>();
@@ -170,9 +205,18 @@ public static class MakeMkvInfo
 
         foreach (var title in record.Titles)
         {
+            title.SameAs = null;
             if (!bySource.TryGetValue(title.Number, out var info))
             {
-                problems.Add($"title {title.Number}: MakeMKV lists no title for it");
+                if (skipped.TryGetValue(title.Number, out var kept))
+                {
+                    title.SameAs = kept;
+                    problems.Add($"title {title.Number}: skipped by MakeMKV, same as title {kept}");
+                }
+                else
+                {
+                    problems.Add($"title {title.Number}: MakeMKV lists no title for it");
+                }
                 continue;
             }
 
@@ -192,6 +236,11 @@ public static class MakeMkvInfo
         foreach (var info in titles.Where(t => !known.Contains(t.SourceTitle)))
             problems.Add($"MakeMKV row {info.Row} comes from title {info.SourceTitle}, " +
                          "which is not in the disc's title table");
+        foreach (var (copy, kept) in skipped.Where(s => !known.Contains(s.Key)))
+            problems.Add($"MakeMKV says it skipped title {copy} as the same as title {kept}, " +
+                         "but that title is not in the disc's title table");
+        foreach (var copy in skipped.Keys.Where(bySource.ContainsKey))
+            problems.Add($"MakeMKV says it skipped title {copy}, but it also lists a row for it; the row is used");
 
         return problems;
     }

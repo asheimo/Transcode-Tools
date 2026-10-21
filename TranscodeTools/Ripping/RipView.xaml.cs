@@ -1317,9 +1317,12 @@ public partial class RipView : UserControl
     }
 
     // ── Chip strip ───────────────────────────────────────────────────
-    // One chip per screen + button set that names the selected title, in
-    // the order found (NamedBy keeps that order). Two buttons on the same
-    // set naming the same title share one chip and are both highlighted.
+    // One chip per screen + button set with a button that names the selected
+    // title, in the order the screens were found. Which buttons name it is
+    // TitleCoverage.NamingButtons: buttons whose chain plays this title as
+    // its one item, counting MakeMKV's skipped copies (SameAs) as this
+    // title. Two buttons on the same set naming it share one chip and are
+    // both highlighted.
 
     private void TitleList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
@@ -1336,7 +1339,7 @@ public partial class RipView : UserControl
             return;
         }
 
-        foreach (var source in title.NamedBy)
+        foreach (var source in TitleCoverage.NamingButtons(_selectedDisc, title))
         {
             var existing = Chips.FirstOrDefault(c => c.Matches(source));
             if (existing != null)

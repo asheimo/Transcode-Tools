@@ -80,7 +80,9 @@ public static class RipBinder
     private static string? Check(TitleRecord title, Dictionary<string, long> files)
     {
         if (string.IsNullOrEmpty(title.RipName))
-            return "MakeMKV listed no file for it";
+            return title.SameAs is int kept
+                ? $"MakeMKV skipped it: same as title {kept}"
+                : "MakeMKV listed no file for it";
         if (!title.Verified)
             return "it failed the chapter check";
         if (!files.TryGetValue(title.RipName, out var size))

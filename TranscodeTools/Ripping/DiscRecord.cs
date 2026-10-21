@@ -54,6 +54,11 @@ public sealed class DiscRecord
     // Edit. Only this makes a disc Complete; the app never infers it.
     public bool Complete { get; set; }
 
+    // How the disc's start-up (its first-play chain) ran when the buttons
+    // were resolved, ending with the registers every button started from,
+    // or why it fell back to the player defaults.
+    public List<string> StartupTrace { get; set; } = new();
+
     public List<TitleRecord>  Titles  { get; set; } = new();
     public List<ScreenRecord> Screens { get; set; } = new();
 }
@@ -67,6 +72,13 @@ public sealed class TitleRecord
     public int VtsTitle { get; set; }   // title number inside that set
     public int Angles   { get; set; }
     public int Chapters { get; set; }   // from TT_SRPT
+
+    // How long the title plays by the disc's own program chains, in whole
+    // seconds: the playback times of the PGCs its chapters start in. Read
+    // from the IFO at Analyse, so it is there for titles MakeMKV skips. A
+    // title at 0 plays nothing; it is a switch in the disc's program. Null
+    // on a record analysed before this was read.
+    public int? PlaySeconds { get; set; }
 
     // From MakeMKV's info run
     public string Duration { get; set; } = "";   // "h:mm:ss" as MakeMKV prints it
@@ -90,6 +102,13 @@ public sealed class TitleRecord
     // Other places that jump to this title (e.g. "VMGM pgc1 pre"),
     // so a title never goes missing without saying where it is reached from.
     public List<string> ReachedFrom { get; set; } = new();
+
+    // Set when MakeMKV's info run skipped this title as a copy of another
+    // (MSG 3027, "Title #36 in VTS 10 is equal to title #35 and was
+    // skipped"): the number of the title it kept in its place. Recorded as
+    // MakeMKV said it; the view shows this title's buttons on the kept
+    // title's file. Null for a title MakeMKV did not skip.
+    public int? SameAs { get; set; }
 
     public TitleFlags Flags { get; set; } = new();
 
@@ -191,6 +210,12 @@ public sealed class ResolvedTarget
     public int?    Button   { get; set; }   // for "menu": the button a LinkPTT/PGN/CN highlights
     public string? Domain   { get; set; }   // for "menu": "VMGM" or "VTS n"
     public string? Why      { get; set; }   // reason for menu/loop/unresolved/resume
+
+    // Every title the button's chain played, in order, from the first
+    // (Title) to the last before it settled on a menu or playback ended:
+    // warnings, logos, title cards, the film, end cards. Each one is named
+    // by the button. Empty when no title was reached.
+    public List<int> Played { get; set; } = new();
 
     public List<string> Trace { get; set; } = new();
     public List<string> Notes { get; set; } = new();

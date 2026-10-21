@@ -252,8 +252,10 @@ public static class DiscAnalysis
                     ? $"No IFO on {videoTs} could be read."
                     : $"No IFO on {videoTs} could be read: {string.Join("; ", problems)}");
 
-        // The resolver needs every IFO's menu PGCs, since a button's chain
-        // can jump between the VMG and any title set.
+        // The resolver needs every IFO's menu and title PGCs, since a
+        // button's chain can jump between the VMG and any title set.
+        FillPlaySeconds(record, parsed);
+
         progress.Report("resolving buttons");
         try
         {
@@ -281,12 +283,35 @@ public static class DiscAnalysis
         return record;
     }
 
-    // Fills each button's Resolved target. The command is decoded again from
-    // its saved raw bytes, which gives the same result the scan had.
+    // Sets each title's PlaySeconds from its title set's IFO: the playback
+    // times of the distinct PGCs its chapters start in. A title whose set
+    // could not be read keeps 0.
+    private static void FillPlaySeconds(DiscRecord record, List<Ifo> ifos)
+    {
+        var sets = ifos.Where(i => i.Kind == IfoKind.Vts)
+                       .ToDictionary(i => Resolver.DomainKey(i.FileName), i => (Pgcs: i.TitlePgcs(), Chapters: i.Chapters()));
+
+        foreach (var title in record.Titles)
+        {
+            if (!sets.TryGetValue($"vts:{title.Vts}", out var set)) continue;
+            if (title.VtsTitle < 1 || title.VtsTitle > set.Chapters.Count) continue;
+
+            title.PlaySeconds = set.Chapters[title.VtsTitle - 1]
+                .Select(ch => ch.Pgcn)
+                .Distinct()
+                .Where(n => n >= 1 && n <= set.Pgcs.Count)
+                .Sum(n => set.Pgcs[n - 1].Seconds);
+        }
+    }
+
+    // Fills each button's Resolved target, and the record's StartupTrace
+    // from the start-up run every button starts from. The command is decoded
+    // again from its saved raw bytes, which gives the same result the scan had.
     private static void ResolveButtons(
         DiscRecord record, List<Ifo> ifos, IReadOnlyList<IfoTitle> titles, CancellationToken token)
     {
-        var resolver = new Resolver(ifos, titles);
+        var resolver = new Resolver(ifos, titles, record.Screens);
+        record.StartupTrace = resolver.StartupTrace.ToList();
         foreach (var screen in record.Screens)
         {
             token.ThrowIfCancellationRequested();
@@ -294,7 +319,7 @@ public static class DiscAnalysis
             foreach (var set in screen.ButtonSets)
                 foreach (var button in set.Buttons)
                     button.Resolved = resolver.Resolve(
-                        domain, screen.Lang, screen.Pgc,
+                        domain, screen.Lang, screen.Pgc, button.Number,
                         VmCommand.Decode(Convert.FromHexString(button.Raw)));
         }
     }
