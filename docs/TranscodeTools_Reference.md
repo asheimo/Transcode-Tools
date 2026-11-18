@@ -2,7 +2,7 @@
 
 ## Overview
 
-Transcode Tools is a personal media processing utility migrated from VB.NET WinForms to C# WPF (.NET 9). The application uses mkvmerge, ffmpeg, ffprobe, and robocopy to remux and transcode MKV video files. The core goal is maximum file size reduction without unacceptable compromise to video or audio quality, leveraging NVIDIA GPU hardware acceleration throughout the processing pipeline.
+Transcode Tools is a personal media processing utility migrated from VB.NET WinForms to C# WPF (.NET 10). The application uses mkvmerge, ffmpeg, ffprobe, and robocopy to remux and transcode MKV video files. The core goal is maximum file size reduction without unacceptable compromise to video or audio quality, leveraging NVIDIA GPU hardware acceleration throughout the processing pipeline.
 
 ## Migration Status
 
@@ -197,6 +197,7 @@ A lossless track must be used as the source when encoding to lossy, even when an
 ## Active Backlog
 
 - HDR10+ dynamic metadata passthrough — shelved pending implementation; visual flag (blue cell #3498DB) implemented at probe time for identification
+- Tearing seen playing back a 1080p transcode of A View to a Kill (2026-11-18, RTX 5060 Ti, first run on .NET 10, ~525 fps). Not yet known whether it is in the file or in the playback (player/display) - check before changing any encode settings
 - Post-transcode ffprobe verification — compare duration, resolution, audio track count against source; log pass/fail. Log file infrastructure now in place.
 - Auto-move testing — pending: TV show colouring (multi-season row colours up); partial TV show failure (show row stays default); cancel mid-run (waiting message, completed folders still move); cancel before any folder completes (no moves, straight to Close); same folder run twice (skipped, colours red); `Completed\`/`Logs\`/`Remux\`/`Transcode\` hidden in both trees.
 - User wiki / manual — user-facing documentation covering all features; to be written once feature set is stable

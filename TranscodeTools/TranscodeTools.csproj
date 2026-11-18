@@ -12,4 +12,16 @@
     <FileVersion>1.1</FileVersion>
   </PropertyGroup>
 
+  <ItemGroup>
+    <PackageReference Include="LibVLCSharp.WPF" Version="3.10.2" />
+    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.24" />
+  </ItemGroup>
+
+  <!-- The DVD access plugins (libdvdnav, libdvdread) the probe added for DVD playback, copied to where libVLC loads its plugins -->
+  <ItemGroup>
+    <None Include="Ripping\Player\vlc_plugins\*.dll"
+          Link="libvlc\win-x64\plugins\access\%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
