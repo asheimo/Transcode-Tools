@@ -8,7 +8,11 @@ Everything from this session is in the commit made at the end of it.
 
 ## Pick up here
 
-**Put one or two more discs through the whole chain** before starting the language work. Use a
+**First: the Rip section of `TranscodeTools_Reference.md`** (Andy, end of session: "we should do
+that next time"). It is a write-up of the chain and the rules settled so far, so the Rip design is
+in one place instead of spread across handoffs. Agree its shape before writing it.
+
+**Then: put one or two more discs through the whole chain** before starting the language work. Use a
 regular movie with extras, ideally from a different studio than Disney. Tonight's resolver and
 naming rule were shaped by SB30NNW1 and checked only against it and THE_CENTENNIAL. The new disc
 shows whether the one-item rule (below) holds up away from Disney's Play / Fast Play / Play All

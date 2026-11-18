@@ -1,20 +1,21 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 17
-VisualStudioVersion = 17.14.37027.9
+# Visual Studio Version 18
+VisualStudioVersion = 18.12.12412.261 stable
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TranscodeTools", "TranscodeTools\TranscodeTools.csproj", "{93ABE97F-83AE-F5EC-75CD-DD48DD7D2E3C}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{5708C2BE-C504-4F51-B703-B130202236AF}"
 	ProjectSection(SolutionItems) = preProject
+		docs\Creating_a_Release.md = docs\Creating_a_Release.md
 		docs\Development_Rules.md = docs\Development_Rules.md
 		docs\TranscodeTools_Reference.md = docs\TranscodeTools_Reference.md
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "handoffs", "handoffs", "{7B02ADFA-1FBC-40FD-A0AB-99DB3B03A031}"
 	ProjectSection(SolutionItems) = preProject
-		docs\handoffs\MOVIE_NAMER_SESSION_HANDOFF_2026-09-16.md = docs\handoffs\MOVIE_NAMER_SESSION_HANDOFF_2026-09-16.md
 		docs\handoffs\movie_namer_handoff.md = docs\handoffs\movie_namer_handoff.md
+		docs\handoffs\MOVIE_NAMER_SESSION_HANDOFF_2026-09-16.md = docs\handoffs\MOVIE_NAMER_SESSION_HANDOFF_2026-09-16.md
 	EndProjectSection
 EndProject
 Global
