@@ -1,17 +1,17 @@
 // ============================================================
 // DiscRecord.cs
 // ------------------------------------------------------------
-// The per-disc record: everything the rip and analysis steps
-// learn about one disc. It is the ripping "config" -- saved as
+// The per-disc record: everything the info stage and naming learn
+// about one disc. It is the ripping "config" -- saved as
 // <Destination>\Rip\<DISC>\Menu\disc.json (see DiscStore) and
-// reloaded on the next run, so it must stand on its own once
-// the ISO is deleted. It is meant to go when the rip folder is
-// deleted after remux.
+// reloaded on the next run, the way Remux and Transcode keep their
+// settings files. Apply in the title list saves the names to it.
 //
-// Field names follow the Python oracle (dvdmenumap.py) so the
-// two can be compared field by field. Deliberately NOT here yet:
-// the menu graph. Its shape comes from the resolver port; it is
-// added then, and records saved before that simply lack it.
+// A DVD's titles come from its title table (the IFO), filled in by
+// MakeMKV's info run; a Blu-ray's titles come from MakeMKV's info
+// run alone, one per title it lists, keyed by the playlist it was
+// built from. Records saved before this layout carry extra fields
+// (menu screens, button targets); they are ignored on load.
 // ============================================================
 
 using System.Text.Json.Serialization;
@@ -21,15 +21,18 @@ namespace TranscodeTools;
 public sealed class DiscRecord
 {
     // Bumped when the record's shape changes in a way old records
-    // need converting for. Records without the menu graph are still 1.
+    // need converting for.
     public int SchemaVersion { get; set; } = 1;
 
     // Volume label, e.g. "THE_CENTENNIAL". Also the folder name under
-    // Rip\ and the ISO file name.
+    // Rip\ and the backup's name.
     public string Name { get; set; } = "";
 
-    // Where the disc was read from: the drive or the mounted ISO.
+    // The backup the record was read from.
     public string SourcePath { get; set; } = "";
+
+    // A Blu-ray (its backup is a BDMV folder); otherwise a DVD.
+    public bool BluRay { get; set; }
 
     public DateTime CreatedUtc { get; set; }
 
@@ -40,89 +43,73 @@ public sealed class DiscRecord
     [JsonIgnore]
     public string RipFolder { get; set; } = "";
 
-    // The log folder of the last Start run, Logs\<timestamp>\<DISC>\,
-    // holding its info.log and rip.log. Naming adds naming.log here.
+    // The log folder of the disc's last run, Logs\<timestamp>\<DISC>\,
+    // holding its info.log. Naming and the player add their logs here.
     public string? RunLogFolder { get; set; }
 
-    // Every .mkv the last finished rip wrote, kept as it stands now: a
-    // file renamed in naming carries its new name, a deleted one stays on
-    // the list flagged Deleted. Null until a rip finishes, so the jobs
-    // list can tell a finished rip from one that stopped part way.
+    // Every .mkv the last finished rip wrote. Null until a rip finishes.
     public List<RipFileRecord>? RipFiles { get; set; }
 
-    // Set when the disc is marked complete in the naming step, cleared by
-    // Edit. Only this makes a disc Complete; the app never infers it.
+    // Set when the disc is marked complete, cleared by Edit. Only this
+    // makes a disc Complete; the app never infers it.
     public bool Complete { get; set; }
 
-    // How the disc's start-up (its first-play chain) ran when the buttons
-    // were resolved, ending with the registers every button started from,
-    // or why it fell back to the player defaults.
-    public List<string> StartupTrace { get; set; } = new();
-
-    public List<TitleRecord>  Titles  { get; set; } = new();
-    public List<ScreenRecord> Screens { get; set; } = new();
+    public List<TitleRecord> Titles { get; set; } = new();
 }
 
-// One title from the disc's title table (TT_SRPT), plus what the rip
-// and the binding step learned about it.
+// One title: from the DVD's title table, or one MakeMKV lists on a
+// Blu-ray, plus what MakeMKV's info run and naming add.
 public sealed class TitleRecord
 {
-    public int Number   { get; set; }   // global title number, 1-based
-    public int Vts      { get; set; }   // title set it lives in
-    public int VtsTitle { get; set; }   // title number inside that set
+    // DVD: the global title number from TT_SRPT, which is the number VLC
+    // gives a pick. Blu-ray: MakeMKV's title number plus one.
+    public int Number   { get; set; }
+    public int Vts      { get; set; }   // DVD: title set it lives in
+    public int VtsTitle { get; set; }   // DVD: title number inside that set
     public int Angles   { get; set; }
-    public int Chapters { get; set; }   // from TT_SRPT
 
-    // How long the title plays by the disc's own program chains, in whole
-    // seconds: the playback times of the PGCs its chapters start in. Read
-    // from the IFO at Analyse, so it is there for titles MakeMKV skips. A
-    // title at 0 plays nothing; it is a switch in the disc's program. Null
-    // on a record analysed before this was read.
-    public int? PlaySeconds { get; set; }
+    // The disc's own chapter count: TT_SRPT on a DVD, the playlist's
+    // chapters by mkvmerge on a Blu-ray. 0 when there is none to read.
+    public int Chapters { get; set; }
 
     // From MakeMKV's info run
-    public string Duration { get; set; } = "";   // "h:mm:ss" as MakeMKV prints it
-    public int    Seconds  { get; set; }
-    public string Segments { get; set; } = "";   // TINFO field 26, e.g. "1-5,6-9"
+    public int?   MakeMkvTitle { get; set; }        // MakeMKV's own title number, what `mkv` takes
+    public string? Playlist    { get; set; }        // TINFO field 16, e.g. "00800.mpls" or "50201.m2ts"
+    public string Duration     { get; set; } = "";  // "h:mm:ss" as MakeMKV prints it
+    public int    Seconds      { get; set; }
+    public string Segments     { get; set; } = "";  // TINFO field 26, e.g. "1-5,6-9"
+    public long   SourceBytes  { get; set; }        // TINFO field 11: title size on the disc
+    public string? RipName     { get; set; }        // TINFO field 27: the name MakeMKV gives this title's rip
+
+    // The chapter check passed: MakeMKV's count against the disc's own.
+    public bool Verified { get; set; }
 
     // For a play-all title: the titles whose runtimes add up to this one.
     public List<int> CompositeOf { get; set; } = new();
 
-    // Binding
-    public string? RipName     { get; set; }  // TINFO field 27: the name MakeMKV gives this title's rip
-    public string? FileName    { get; set; }  // actual file on disk, set once the binder finds it
-    public bool    Bound       { get; set; }  // key matched and size inside the band
-    public bool    Verified    { get; set; }  // chapter gate passed
-    public long    SourceBytes { get; set; }  // TINFO field 11: title size on the disc
-    public long    FileBytes   { get; set; }  // written file's size, measured at bind time
-
-    // Every menu button that names this title, in the order found.
-    public List<NamedBySource> NamedBy { get; set; } = new();
-
-    // Other places that jump to this title (e.g. "VMGM pgc1 pre"),
-    // so a title never goes missing without saying where it is reached from.
-    public List<string> ReachedFrom { get; set; } = new();
-
     // Set when MakeMKV's info run skipped this title as a copy of another
-    // (MSG 3027, "Title #36 in VTS 10 is equal to title #35 and was
-    // skipped"): the number of the title it kept in its place. Recorded as
-    // MakeMKV said it; the view shows this title's buttons on the kept
-    // title's file. Null for a title MakeMKV did not skip.
+    // (MSG 3027): the number of the title it kept in its place. A pick of
+    // this title lands on the kept title's row. Null for a title MakeMKV
+    // did not skip.
     public int? SameAs { get; set; }
+
+    // Binding, once the title is ripped
+    public string? FileName  { get; set; }  // actual file on disk
+    public bool    Bound     { get; set; }  // key matched and size inside the band
+    public long    FileBytes { get; set; }  // written file's size, measured at bind time
 
     public TitleFlags Flags { get; set; } = new();
 
     public string Note { get; set; } = "";
 
-    // The name the file was given, without ".mkv". Empty until named.
+    // The name given in naming, without ".mkv", an extra's Plex suffix
+    // included ("Making Of-featurette"). Empty until named.
     public string Name { get; set; } = "";
 }
 
 public sealed class TitleFlags
 {
-    public bool PlayAll      { get; set; }
-    public bool NoMenuButton { get; set; }
-    public bool Deleted      { get; set; }   // its file was deleted in the naming step
+    public bool PlayAll { get; set; }
 }
 
 // One file the rip wrote.
@@ -131,92 +118,4 @@ public sealed class RipFileRecord
     public string Name    { get; set; } = "";   // current file name, with ".mkv"
     public long   Bytes   { get; set; }         // size when the rip wrote it
     public bool   Deleted { get; set; }         // deleted in the naming step
-}
-
-// Identifies one button on one screen: the IFO and menu program chain
-// the screen belongs to, the screen's cell, which button set in that
-// cell, and the button number within the set.
-public sealed class NamedBySource
-{
-    public string Ifo       { get; set; } = "";
-    public int    Pgc       { get; set; }
-    public int    Cell      { get; set; }
-    public int    ButtonSet { get; set; }   // 1-based
-    public int    Button    { get; set; }   // 1-based
-}
-
-// One menu screen: a cell of a menu program chain.
-public sealed class ScreenRecord
-{
-    public string Ifo    { get; set; } = "";   // e.g. "VTS_01_0.IFO"
-    public string Domain { get; set; } = "";   // "vmg" or "vts"
-    public string Lang   { get; set; } = "";
-    public string Menu   { get; set; } = "";   // menu type, e.g. "root"
-    public int    Pgc    { get; set; }
-    public int    Cell   { get; set; }
-
-    // Cached frame, file name relative to the Menu folder. Null when
-    // no picture was extracted for this screen.
-    public string? Image { get; set; }
-
-    public long FirstSector { get; set; }
-    public long LastSector  { get; set; }
-    public int  NavPacks    { get; set; }
-
-    // Distinct button sets seen across the cell's navigation packets.
-    public List<ButtonSetRecord> ButtonSets { get; set; } = new();
-}
-
-public sealed class ButtonSetRecord
-{
-    public int Number { get; set; }   // 1-based, in the order found
-    public List<ButtonRecord> Buttons { get; set; } = new();
-}
-
-public sealed class ButtonRecord
-{
-    public int Number { get; set; }   // 1-based
-
-    // Highlight rectangle as corners, in the picture's own pixels.
-    public int X0 { get; set; }
-    public int Y0 { get; set; }
-    public int X1 { get; set; }
-    public int Y1 { get; set; }
-
-    // Button numbers reached by the remote's arrow keys (0 = none).
-    public int Up    { get; set; }
-    public int Down  { get; set; }
-    public int Left  { get; set; }
-    public int Right { get; set; }
-
-    public string CommandText { get; set; } = "";   // decoded, e.g. "LinkPGCN 9"
-    public string Raw         { get; set; } = "";   // the 8 command bytes as hex
-
-    public ResolvedTarget? Resolved { get; set; }
-}
-
-// Where a button ends up once its command chain is followed.
-public sealed class ResolvedTarget
-{
-    // "title", "menu", "resume", "exit", "loop" or "unresolved"
-    public string Kind { get; set; } = "";
-
-    public int?    Title    { get; set; }
-    public int?    Chapter  { get; set; }
-    public int?    Vts      { get; set; }
-    public int?    VtsTitle { get; set; }
-    public int?    Chapters { get; set; }
-    public int?    MenuPgc  { get; set; }
-    public int?    Button   { get; set; }   // for "menu": the button a LinkPTT/PGN/CN highlights
-    public string? Domain   { get; set; }   // for "menu": "VMGM" or "VTS n"
-    public string? Why      { get; set; }   // reason for menu/loop/unresolved/resume
-
-    // Every title the button's chain played, in order, from the first
-    // (Title) to the last before it settled on a menu or playback ended:
-    // warnings, logos, title cards, the film, end cards. Each one is named
-    // by the button. Empty when no title was reached.
-    public List<int> Played { get; set; } = new();
-
-    public List<string> Trace { get; set; } = new();
-    public List<string> Notes { get; set; } = new();
 }

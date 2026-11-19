@@ -17,9 +17,13 @@
 //      image file itself (measured with MakeMKV 1.18.3), so the
 //      path passed is the finished ISO's own name.
 //
-// Success is makemkvcon exiting with 0 AND the ISO existing. The
+// For a Blu-ray the same path becomes a BDMV folder (measured,
+// MakeMKV 1.18.3), so the backup is checked, sized and deleted
+// through DiscStore.Backup*, which take either.
+//
+// Success is makemkvcon exiting with 0 AND the backup existing. The
 // docs do not say what a successful backup prints, so no message
-// text is relied on. On failure or cancel the partial ISO is
+// text is relied on. On failure or cancel the partial backup is
 // deleted: left in ISO\ it would look like a finished backup.
 //
 // Runs off the UI thread. Progress is reported through
@@ -35,7 +39,7 @@ public static class BackupJob
 {
     // Runs the whole backup for the disc in `driveLetter` ("D:").
     // Throws MakeMkvException on failure, OperationCanceledException on
-    // cancel; in both cases the partial ISO has been removed.
+    // cancel; in both cases the partial backup has been removed.
     public static async Task RunAsync(
         string makeMkvPath,
         string driveLetter,
@@ -68,11 +72,11 @@ public static class BackupJob
             if (result.ExitCode != 0)
                 throw MakeMkv.ExitFailure(result);
 
-            if (!File.Exists(isoPath))
+            if (!DiscStore.BackupExists(isoPath))
                 throw new MakeMkvException($"MakeMKV finished but {isoPath} was not created.");
 
             log.WriteLine();
-            log.WriteLine($"Backup complete: {isoPath} ({new FileInfo(isoPath).Length:N0} bytes)");
+            log.WriteLine($"Backup complete: {isoPath} ({DiscStore.BackupBytes(isoPath):N0} bytes)");
             succeeded = true;
         }
         catch (OperationCanceledException)
@@ -90,7 +94,7 @@ public static class BackupJob
         finally
         {
             if (!succeeded)
-                DeletePartialIso(isoPath, log);
+                DeletePartialBackup(isoPath, log);
         }
     }
 
@@ -130,17 +134,17 @@ public static class BackupJob
             : $"MakeMKV did not list drive {want}.");
     }
 
-    private static void DeletePartialIso(string isoPath, StreamWriter log)
+    private static void DeletePartialBackup(string isoPath, StreamWriter log)
     {
-        if (!File.Exists(isoPath)) return;
+        if (!DiscStore.BackupExists(isoPath)) return;
         try
         {
-            File.Delete(isoPath);
-            log.WriteLine($"Partial image deleted: {isoPath}");
+            DiscStore.DeleteBackup(isoPath);
+            log.WriteLine($"Partial backup deleted: {isoPath}");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            log.WriteLine($"Partial image could not be deleted: {isoPath}: {ex.Message}");
+            log.WriteLine($"Partial backup could not be deleted: {isoPath}: {ex.Message}");
         }
     }
 }

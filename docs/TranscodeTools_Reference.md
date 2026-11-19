@@ -194,6 +194,11 @@ A lossless track must be used as the source when encoding to lossy, even when an
 - Output file is renamed with a `[test-qsv]` or `[test-nvenc]` moniker (e.g. `Beetlejuice (1998)-480p [test-qsv].mkv`) and written to the normal output folder
 - If the user checks a second file while test mode is on, a warning is shown and test mode is cleared
 
+## Known Issues
+
+- **MakeMKV counts one chapter more than the Blu-ray playlist.** MakeMKV adds a chapter mark at the very end of a title, so on a Blu-ray its chapter count (TINFO field 8) is one higher than the playlist's own count from `mkvmerge -J`. Reported on the MakeMKV forum as an empty chapter at the end of Blu-ray rips (Ash vs Evil Dead S1, The Walking Dead S6, "seen this on a few blu-rays") and, for DVDs, as an extra chapter mark at the very end of each file since 1.10.3. Measured 2026-11-18 on five Blu-rays: every chapter mismatch was MakeMKV exactly one higher (BLUES_BROTHERS_DOM `00300`; LEGEND OF DRUNKEN MASTER `00001`, `00012`, `00022`; LOGICAL_VOLUME_ID `00002`, `00004`), never any other difference. The info stage's Blu-ray chapter check therefore accepts MakeMKV's count equal to mkvmerge's or one higher (`MakeMkvInfo`).
+- **MakeMKV counts one chapter fewer than the DVD title table.** On a DVD MakeMKV drops the trailing menu-jump cell, so its count is TT_SRPT's or one fewer; the DVD chapter check accepts both.
+
 ## Active Backlog
 
 - HDR10+ dynamic metadata passthrough — shelved pending implementation; visual flag (blue cell #3498DB) implemented at probe time for identification

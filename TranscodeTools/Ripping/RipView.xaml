@@ -6,20 +6,19 @@
      Layout, top to bottom:
        Destination line  |  Hide complete discs
        drives box        |  disc list (the jobs list)
-       chip strip ................... Fit: Width / Window
-       menu picture
+       player
        the selected disc's titles
        status line
 
-     Splitters sit between the top band and the picture, and between
-     the picture and the titles, so either can be given more of the
+     Splitters sit between the top band and the player, and between
+     the player and the titles, so either can be given more of the
      window's height. The top band has its own column splitter, which
      moves the Destination line with the drives box, so the two tables
      start and end on the same lines.
 
-     The picture scales to its space, up or down, keeping its shape.
-     Fit Width fills the width and scrolls when the picture is taller
-     than its space; Fit Window always shows the whole picture.
+     The player plays the disc loaded from the disc list (Load Disc).
+     It takes the arrow keys and Enter while it has focus; clicking it
+     gives it focus.
 
      A drive row's button reads Backup, Cancel, Eject or Log by the
      row's backup state; the row fills green with the backup's
@@ -30,6 +29,7 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:TranscodeTools"
+             xmlns:vlc="clr-namespace:LibVLCSharp.WPF;assembly=LibVLCSharp.WPF"
              Loaded="RipView_Loaded"
              Unloaded="RipView_Unloaded">
 
@@ -39,31 +39,24 @@
 
         <!-- Right-click menu on a disc row. x:Shared="False" gives each row
              its own instance; one shared ContextMenu can only have one parent.
-             Start Over is the same as the row's start-over button. -->
+             Cancel stops a running info job. -->
         <ContextMenu x:Key="JobRowMenu" x:Shared="False">
             <MenuItem Header="Open Folder in Explorer" Click="OpenDiscFolder_Click"/>
-            <MenuItem Header="Start Over"
-                      IsEnabled="{Binding CanStartOver}"
-                      Click="StartOver_Click"/>
+            <MenuItem Header="Cancel"
+                      IsEnabled="{Binding IsRunning}"
+                      Click="CancelJob_Click"/>
         </ContextMenu>
 
-        <!-- Right-click menu on a title row -->
-        <ContextMenu x:Key="TitleRowMenu" x:Shared="False">
-            <MenuItem Header="Play in MPV" Click="PlayInMpv_Click"/>
-        </ContextMenu>
-
-        <!-- Title rows: the theme's DataGridRow style, the right-click
-             menu, the row's note as its tooltip, and selection that follows
-             the keyboard into the row's Delete box, so the row's menu
-             screen shows while it is being worked on. -->
+        <!-- Title rows: the theme's DataGridRow style, the row's note as its
+             tooltip, and selection that follows the keyboard into the row's
+             Type box. -->
         <Style x:Key="TitleRowStyle" TargetType="DataGridRow"
                BasedOn="{StaticResource {x:Type DataGridRow}}">
-            <Setter Property="ContextMenu" Value="{StaticResource TitleRowMenu}"/>
             <Setter Property="ToolTip" Value="{Binding Note}"/>
             <EventSetter Event="PreviewGotKeyboardFocus" Handler="TitleRow_PreviewGotKeyboardFocus"/>
         </Style>
 
-        <!-- Column header and cell text centred, for Runtime and Delete -->
+        <!-- Column header and cell text centred, for Runtime -->
         <Style x:Key="CenteredColumnHeader" TargetType="DataGridColumnHeader"
                BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
             <Setter Property="HorizontalContentAlignment" Value="Center"/>
@@ -129,50 +122,13 @@
                 </DataTrigger>
             </Style.Triggers>
         </Style>
-
-        <!-- Screen chip: one per source screen in the strip above the picture.
-             The checked chip is the screen being shown. Foreground reaches the
-             content through TextElement.Foreground, as custom templates must. -->
-        <Style x:Key="ChipRadio" TargetType="RadioButton">
-            <Setter Property="Foreground" Value="{DynamicResource ForegroundColor}"/>
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Padding" Value="10,3"/>
-            <Setter Property="Margin" Value="0,0,6,0"/>
-            <Setter Property="VerticalAlignment" Value="Center"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="RadioButton">
-                        <Border x:Name="Bd"
-                                Background="{DynamicResource ButtonBg}"
-                                BorderBrush="{DynamicResource BorderColor}"
-                                BorderThickness="1"
-                                CornerRadius="4"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter VerticalAlignment="Center"
-                                              TextElement.Foreground="{TemplateBinding Foreground}"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ButtonHoverBg}"/>
-                            </Trigger>
-                            <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource AccentColor}"/>
-                                <Setter Property="Foreground" Value="{DynamicResource AccentColor}"/>
-                                <Setter Property="FontWeight" Value="SemiBold"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
     </UserControl.Resources>
 
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="150" MinHeight="110"/>   <!-- Destination | hide; drives | discs -->
             <RowDefinition Height="8"/>                     <!-- Splitter -->
-            <RowDefinition Height="*" MinHeight="180"/>     <!-- Chips + picture -->
+            <RowDefinition Height="*" MinHeight="180"/>     <!-- Player -->
             <RowDefinition Height="8"/>                     <!-- Splitter -->
             <RowDefinition Height="200" MinHeight="120"/>   <!-- Selected disc's titles -->
             <RowDefinition Height="Auto"/>                  <!-- Status -->
@@ -186,7 +142,7 @@
                 <RowDefinition Height="*"/>    <!-- Drives | discs -->
             </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="350" MinWidth="250"/>
+                <ColumnDefinition Width="420" MinWidth="250"/>
                 <ColumnDefinition Width="8"/>
                 <ColumnDefinition Width="*" MinWidth="240"/>
             </Grid.ColumnDefinitions>
@@ -229,6 +185,14 @@
                     <GridView>
                         <GridViewColumn Header="Drive" Width="60"  DisplayMemberBinding="{Binding Letter}"/>
                         <GridViewColumn Header="Disc"  Width="180" DisplayMemberBinding="{Binding Label}"/>
+                        <!-- The backup's progress while it runs -->
+                        <GridViewColumn Header="%" Width="50">
+                            <GridViewColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Percent}" HorizontalAlignment="Center"/>
+                                </DataTemplate>
+                            </GridViewColumn.CellTemplate>
+                        </GridViewColumn>
                         <GridViewColumn Header=""      Width="90">
                             <GridViewColumn.CellTemplate>
                                 <DataTemplate>
@@ -256,11 +220,11 @@
 
             <!-- Discs: one row per disc on the Destination, rebuilt from disk
                  when a Destination loads. Selecting a row does nothing more
-                 than select it. Step is the disc's next step. The button reads
-                 Start, then Continue (at Naming it lists the disc's titles
-                 below), Open on a complete disc (its titles, read-only), and
-                 Cancel while running. The start-over button and
-                 the right-click menu run the chain again from Analyse. -->
+                 than select it. Status is Ready or Playing (a running or
+                 failed job's message while there is one); Tracks is the number
+                 of titles VLC lists, once the disc has been loaded. Load Disc
+                 plays the disc and lists its titles below; Stop stops it. The
+                 right-click menu runs the chain again from Analyse. -->
             <ListView Grid.Row="2" Grid.Column="2"
                       x:Name="JobList"
                       SelectionMode="Single"
@@ -270,35 +234,26 @@
                     <GridView>
                         <GridViewColumn Header="Disc" Width="180"
                                         DisplayMemberBinding="{Binding Disc, TargetNullValue=''}"/>
-                        <GridViewColumn Header="Step" Width="90"
-                                        DisplayMemberBinding="{Binding Step, TargetNullValue=''}"/>
-                        <GridViewColumn Header="Status" Width="195">
+                        <GridViewColumn Header="Status" Width="150">
                             <GridViewColumn.CellTemplate>
                                 <DataTemplate>
                                     <TextBlock Style="{StaticResource JobStatusText}"
-                                               Text="{Binding Status, TargetNullValue=''}"
-                                               ToolTip="{Binding Status, TargetNullValue=''}"/>
+                                               Text="{Binding ShownStatus, TargetNullValue=''}"
+                                               ToolTip="{Binding ShownStatus, TargetNullValue=''}"/>
                                 </DataTemplate>
                             </GridViewColumn.CellTemplate>
                         </GridViewColumn>
-                        <!-- Start / Continue / Cancel, with the start-over button
-                             beside it once a row is past Analyse and not running -->
-                        <GridViewColumn Header="" Width="125">
+                        <GridViewColumn Header="Tracks" Width="60"
+                                        DisplayMemberBinding="{Binding Tracks, TargetNullValue=''}"/>
+                        <!-- Load Disc / Stop. Disabled while the disc's chain runs. -->
+                        <GridViewColumn Header="" Width="110">
                             <GridViewColumn.CellTemplate>
                                 <DataTemplate>
-                                    <StackPanel Orientation="Horizontal">
-                                        <Button Content="{Binding ActionText}"
-                                                Style="{StaticResource FlatButton}"
-                                                Padding="12,2"
-                                                Click="JobAction_Click"/>
-                                        <Button Content="&#x21BA;"
-                                                Style="{StaticResource FlatButton}"
-                                                Padding="8,2"
-                                                Margin="4,0,0,0"
-                                                ToolTip="Start over"
-                                                Visibility="{Binding CanStartOver, Converter={StaticResource BoolToVisibility}}"
-                                                Click="StartOver_Click"/>
-                                    </StackPanel>
+                                    <Button Content="{Binding PlayText}"
+                                            Style="{StaticResource FlatButton}"
+                                            Padding="12,2"
+                                            IsEnabled="{Binding IsRunning, Converter={StaticResource InverseBool}}"
+                                            Click="PlayButton_Click"/>
                                 </DataTemplate>
                             </GridViewColumn.CellTemplate>
                         </GridViewColumn>
@@ -307,7 +262,7 @@
             </ListView>
         </Grid>
 
-        <!-- Splitter between the drives/jobs band and the picture -->
+        <!-- Splitter between the drives/jobs band and the player -->
         <GridSplitter Grid.Row="1"
                       HorizontalAlignment="Stretch"
                       VerticalAlignment="Stretch"
@@ -316,117 +271,60 @@
                       Background="Transparent"
                       Template="{StaticResource GripSplitterH}"/>
 
-        <!-- Chip strip above the menu picture. Kept in one row with the
-             picture so the splitters on either side resize the picture,
-             never the fixed-height strip. The strip is tall enough for a
-             row of chips with its scroll bar under them, so a long row
-             scrolls without the bar cutting into the chips. -->
-        <Grid Grid.Row="2">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="46"/>   <!-- Chip strip: fixed so the picture never moves -->
-                <RowDefinition Height="6"/>
-                <RowDefinition Height="*"/>    <!-- Picture -->
-            </Grid.RowDefinitions>
-
-            <Grid Grid.Row="0">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-
-                <!-- One chip per source screen, in the order the screens were found -->
-                <ScrollViewer Grid.Column="0"
-                              VerticalAlignment="Top"
-                              HorizontalScrollBarVisibility="Auto"
-                              VerticalScrollBarVisibility="Disabled">
-                    <ItemsControl x:Name="ChipStrip">
-                        <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate>
-                                <StackPanel Orientation="Horizontal"/>
-                            </ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <RadioButton Style="{StaticResource ChipRadio}"
-                                             GroupName="ScreenChips"
-                                             Content="{Binding Label}"
-                                             ToolTip="{Binding ToolTip}"
-                                             IsChecked="{Binding IsSelected, Mode=TwoWay}"
-                                             Checked="Chip_Checked"/>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </ScrollViewer>
-
-                <!-- How the picture uses its space. Saved in the app's
-                     settings so Rip opens the way it was left. -->
-                <StackPanel Grid.Column="1"
-                            Orientation="Horizontal"
-                            VerticalAlignment="Top"
-                            Margin="12,4,0,0">
-                    <TextBlock Text="Fit:"
-                               Foreground="{DynamicResource SubtleForeground}"
-                               FontSize="13"
-                               VerticalAlignment="Center"
-                               Margin="0,0,8,0"/>
-                    <RadioButton x:Name="FitWidthRadio"
-                                 Content="Width"
-                                 GroupName="PictureFit"
-                                 Margin="0,0,12,0"
-                                 Checked="FitRadio_Checked"/>
-                    <RadioButton x:Name="FitWindowRadio"
-                                 Content="Window"
-                                 GroupName="PictureFit"
-                                 Margin="0"
-                                 Checked="FitRadio_Checked"/>
-                </StackPanel>
+        <!-- The player. The frame takes keyboard focus for the disc's menus.
+             VLC draws into VideoView's native window, which WPF can't draw
+             over; only VideoView's overlay (its content) sits above it. The
+             VideoView is never collapsed: it hands VLC its window handle when
+             the player is attached, and a collapsed one has none yet, which
+             sends VLC to a window of its own. While nothing plays, the cover
+             in the overlay hides the empty video window. The overlay's
+             near-transparent background (alpha 1) is what makes it take the
+             click that gives the player focus: fully transparent pixels of a
+             layered window pass clicks through to the window below.
+             The frame's border turns green while the player has the keys, the
+             same green the file list uses for a file with saved settings. It is always 2 px, so focus never resizes the video. -->
+        <Border Grid.Row="2"
+                x:Name="PlayerFrame"
+                Focusable="True"
+                FocusVisualStyle="{x:Null}"
+                Background="{DynamicResource PanelBg}"
+                CornerRadius="4"
+                PreviewKeyDown="Player_PreviewKeyDown"
+                MouseDown="Player_MouseDown"
+                LostKeyboardFocus="PlayerFrame_LostKeyboardFocus">
+            <Border.Style>
+                <Style TargetType="Border">
+                    <Setter Property="BorderBrush" Value="{DynamicResource BorderColor}"/>
+                    <Setter Property="BorderThickness" Value="2"/>
+                    <Style.Triggers>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter Property="BorderBrush" Value="Green"/>
+                        </Trigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+            <Grid>
+                <vlc:VideoView x:Name="PlayerVideo">
+                    <Grid Background="#01000000"
+                          PreviewKeyDown="Player_PreviewKeyDown"
+                          MouseDown="Player_MouseDown">
+                        <Border x:Name="PlayerCover"
+                                Background="{DynamicResource PanelBg}">
+                            <TextBlock x:Name="PlayerPlaceholder"
+                                       Foreground="{DynamicResource SubtleForeground}"
+                                       FontSize="13"
+                                       TextWrapping="Wrap"
+                                       TextAlignment="Center"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Margin="24"/>
+                        </Border>
+                    </Grid>
+                </vlc:VideoView>
             </Grid>
+        </Border>
 
-            <Border Grid.Row="2"
-                    Background="{DynamicResource PanelBg}"
-                    BorderBrush="{DynamicResource BorderColor}"
-                    BorderThickness="1"
-                    CornerRadius="4">
-                <Grid>
-                    <TextBlock x:Name="PicturePlaceholder"
-                               Foreground="{DynamicResource SubtleForeground}"
-                               FontSize="13"
-                               TextWrapping="Wrap"
-                               TextAlignment="Center"
-                               HorizontalAlignment="Center"
-                               VerticalAlignment="Center"
-                               Margin="24"/>
-
-                    <!-- The picture and the hotspot layer share one container,
-                         sized in code to the picture's own pixels (720 x 480
-                         NTSC, 720 x 576 PAL), so button rectangles stay in
-                         source coordinates. The Viewbox scales the pair
-                         together, up or down, keeping their shape.
-                         The ScrollViewer decides the fit: with vertical
-                         scrolling off it hands the Viewbox the whole space
-                         (Fit Window); with it on, the height is unlimited, so
-                         the Viewbox scales to the width alone (Fit Width). -->
-                    <ScrollViewer x:Name="PictureScroll"
-                                  HorizontalScrollBarVisibility="Disabled"
-                                  VerticalScrollBarVisibility="Auto"
-                                  Visibility="Collapsed">
-                        <Viewbox Stretch="Uniform"
-                                 StretchDirection="Both"
-                                 HorizontalAlignment="Center"
-                                 VerticalAlignment="Center">
-                            <Grid x:Name="PictureFrame">
-                                <Image x:Name="MenuImage"
-                                       Stretch="Fill"
-                                       RenderOptions.BitmapScalingMode="HighQuality"/>
-                                <Canvas x:Name="HotspotLayer"/>
-                            </Grid>
-                        </Viewbox>
-                    </ScrollViewer>
-                </Grid>
-            </Border>
-        </Grid>
-
-        <!-- Splitter between the picture and the list -->
+        <!-- Splitter between the player and the list -->
         <GridSplitter Grid.Row="3"
                       HorizontalAlignment="Stretch"
                       VerticalAlignment="Stretch"
@@ -458,9 +356,9 @@
                            FontWeight="SemiBold"
                            VerticalAlignment="Center"
                            TextTrimming="CharacterEllipsis"/>
-                <!-- Applies every changed row at once: the typed names and the
-                     ticked Deletes. Enabled only while there is a change. On a
-                     complete disc it reads Edit and reopens the disc. -->
+                <!-- Saves every changed row's name and type to the disc's record.
+                     Enabled only while there is a change. On a complete disc it
+                     reads Edit and reopens the disc. -->
                 <Button Grid.Column="1"
                         x:Name="ApplyButton"
                         Content="Apply"
@@ -480,8 +378,8 @@
                         Click="Complete_Click"/>
             </Grid>
 
-            <!-- Shown while no disc is selected above, or for a disc not yet
-                 analysed -->
+            <!-- Shown while no disc is selected above, or for a disc whose info
+                 run has not finished -->
             <TextBlock Grid.Row="1"
                        x:Name="TitlesPlaceholder"
                        Foreground="{DynamicResource SubtleForeground}"
@@ -491,14 +389,11 @@
                        HorizontalAlignment="Center"
                        VerticalAlignment="Center"/>
 
-            <!-- One row per .mkv in the disc's rip folder: files bound to a
-                 disc title first, in title order, then files no title claims.
-                 The Name cell edits in place (one click or F2, Enter to keep,
-                 Esc to undo) and the Type dropdown sets Main title or a Plex
-                 extras type, unless the row's Delete box is ticked; then the
-                 Name cell's tooltip says to untick Delete. A click anywhere else in the
-                 row only selects it. Runtime and Delete are
-                 fixed-width and centred. -->
+            <!-- One row per title MakeMKV's info run joined, in title order,
+                 from the disc's record. The Name cell edits in place (one click
+                 or F2, Enter to keep, Esc to undo) and the Type dropdown sets
+                 Main title or a Plex extras type. A click anywhere else in the
+                 row only selects it. Runtime is fixed-width and centred. -->
             <DataGrid Grid.Row="1"
                       x:Name="TitleList"
                       Visibility="Collapsed"
@@ -506,10 +401,8 @@
                       SelectionMode="Single"
                       SelectionUnit="FullRow"
                       ScrollViewer.VerticalScrollBarVisibility="Auto"
-                      BeginningEdit="TitleList_BeginningEdit"
                       PreparingCellForEdit="TitleList_PreparingCellForEdit"
-                      CellEditEnding="TitleList_CellEditEnding"
-                      SelectionChanged="TitleList_SelectionChanged">
+                      CellEditEnding="TitleList_CellEditEnding">
                 <DataGrid.Columns>
                     <DataGridTextColumn Header="#" Width="50" IsReadOnly="True"
                                         Binding="{Binding Number}"/>
@@ -517,8 +410,6 @@
                                         Binding="{Binding Runtime}"
                                         HeaderStyle="{StaticResource CenteredColumnHeader}"
                                         ElementStyle="{StaticResource CenteredCellText}"/>
-                    <DataGridTextColumn Header="File" Width="260" IsReadOnly="True"
-                                        Binding="{Binding FileName}"/>
                     <DataGridTextColumn x:Name="NameColumn" Header="Name" Width="*"
                                         Binding="{Binding Name}"
                                         EditingElementStyle="{StaticResource DataGridEditingTextBox}">
@@ -528,18 +419,11 @@
                                 <!-- One click in a Name cell starts editing it -->
                                 <EventSetter Event="PreviewMouseLeftButtonDown"
                                              Handler="NameCell_PreviewMouseLeftButtonDown"/>
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding Delete}" Value="True">
-                                        <Setter Property="ToolTip"
-                                                Value="{x:Static local:TitleNaming.UntickDeleteToEdit}"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
                             </Style>
                         </DataGridTextColumn.CellStyle>
                     </DataGridTextColumn>
                     <!-- Main title or a Plex extras type. Empty until chosen;
-                         disabled on a row ticked for Delete and on a complete
-                         disc. -->
+                         disabled on a complete disc. -->
                     <DataGridTemplateColumn Header="Type" Width="160" CanUserResize="False">
                         <DataGridTemplateColumn.CellTemplate>
                             <DataTemplate>
@@ -550,7 +434,6 @@
                                           Margin="2,1">
                                     <ComboBox.Style>
                                         <Style TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
-                                            <Setter Property="IsEnabled" Value="{Binding CanEdit}"/>
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding IsReadOnly, RelativeSource={RelativeSource AncestorType=DataGrid}}" Value="True">
                                                     <Setter Property="IsEnabled" Value="False"/>
@@ -559,15 +442,6 @@
                                         </Style>
                                     </ComboBox.Style>
                                 </ComboBox>
-                            </DataTemplate>
-                        </DataGridTemplateColumn.CellTemplate>
-                    </DataGridTemplateColumn>
-                    <DataGridTemplateColumn Header="Delete" Width="60" CanUserResize="False"
-                                            HeaderStyle="{StaticResource CenteredColumnHeader}">
-                        <DataGridTemplateColumn.CellTemplate>
-                            <DataTemplate>
-                                <CheckBox IsChecked="{Binding Delete, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                          IsEnabled="{Binding IsReadOnly, RelativeSource={RelativeSource AncestorType=DataGrid}, Converter={StaticResource InverseBool}}"/>
                             </DataTemplate>
                         </DataGridTemplateColumn.CellTemplate>
                     </DataGridTemplateColumn>

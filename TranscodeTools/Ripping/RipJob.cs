@@ -1,40 +1,27 @@
 // ============================================================
 // RipJob.cs
 // ------------------------------------------------------------
-// One row in the jobs list, and the work behind it.
+// One row in the disc list, and the info job behind it.
 //
 // One row per disc on the Destination: added when a disc's backup
 // completes, and rebuilt from disk when a Destination loads (see
-// RipView.RebuildJobs). Its Step is the next step in the disc's chain:
-// Analyse, Info, Rip, Naming, then Complete. Its button reads Start
-// while Analyse is next, Continue after that, and Open on a complete
-// disc; a separate start-over button runs the chain again from Analyse
-// while the backup ISO is there. The work uses the backup ISO, so Drive
-// is only where the disc was backed up from.
+// RipView.RebuildJobs). The row shows Ready or Playing, the number
+// of titles VLC lists once the disc has been loaded (Tracks), and one
+// button, Load Disc / Stop. Step is the disc's next step (Info,
+// Naming, then Complete), kept for Hide complete discs.
 //
-// A job outlives the drive it started from, which is why it is its
-// own object rather than state on the drive row. It runs off the UI
-// thread and reports through IProgress<string>; the Python oracle
-// printed the same messages to stdout, which would vanish here.
-//
-// The read fills the record from the IFOs (seam 1: the title table
-// and the menu program chains with their cells) and then from each
-// menu cell's VOB sectors (seam 2: NavPacks and the button sets, each
-// button with its rectangle, arrow-key neighbours and decoded
-// command). Once every IFO is read, the PGC resolver (seam 3) follows
-// each button's command through the command chains and fills its
-// Resolved target; each title then gets NamedBy (the buttons that
-// lead to it) and ReachedFrom (the PGC commands that jump to it), and
-// each screen worth showing gets a picture (seam 4, MenuFrames).
-// The job then runs MakeMKV's info on the ISO (seam 5, MakeMkvInfo)
-// and the rip with binding (seam 6, MakeMkvRip + RipBinder); the view
-// runs the stages, see RipView.RunAnalysisAsync.
+// The info job runs by itself after a backup, and on a Destination
+// load for a disc whose info never finished: for a DVD the title table
+// (DiscTitles.ReadDvd) and then MakeMKV's info, for a Blu-ray MakeMKV's
+// info with mkvmerge's chapter check (MakeMkvInfo). It works from the
+// backup, so Drive is only where the disc was backed up from. A job
+// outlives the drive it started from, which is why it is its own
+// object rather than state on the drive row. It runs off the UI
+// thread and reports through IProgress<string>.
 // ============================================================
 
 using System.ComponentModel;
-using System.IO;
 using System.Runtime.CompilerServices;
-using System.Windows;
 
 namespace TranscodeTools;
 
@@ -46,11 +33,9 @@ public sealed class RipJob : INotifyPropertyChanged
     public string Drive { get; }
 
     // The Destination the disc was backed up under. Kept on the job
-    // because the view's Destination can be changed while it waits.
+    // because the view's Destination can be changed while it runs.
     public string Destination { get; }
 
-    // A job is added once its disc's backup completes and waits,
-    // Ready, until its Start is pressed.
     public RipJob(string disc, string drive, string destination)
     {
         Disc        = disc;
@@ -58,35 +43,12 @@ public sealed class RipJob : INotifyPropertyChanged
         Destination = destination;
     }
 
-    // While the job runs, the stage running now. Otherwise the next step
-    // in the chain, which is where Continue picks up.
-    private JobStep _step = JobStep.Analyse;
+    // While the job runs, Info. Otherwise the disc's next step.
+    private JobStep _step = JobStep.Info;
     public JobStep Step
     {
         get => _step;
-        set
-        {
-            if (_step == value) return;
-            _step = value;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(ActionText));
-            OnPropertyChanged(nameof(CanStartOver));
-        }
-    }
-
-    // Whether the backup ISO is still there. Only starting over needs it;
-    // a row stays once its ISO is deleted.
-    private bool _hasIso;
-    public bool HasIso
-    {
-        get => _hasIso;
-        set
-        {
-            if (_hasIso == value) return;
-            _hasIso = value;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(CanStartOver));
-        }
+        set { if (_step == value) return; _step = value; OnPropertyChanged(); }
     }
 
     // What the job is doing now while it runs, and what came of it when
@@ -95,7 +57,7 @@ public sealed class RipJob : INotifyPropertyChanged
     public string Status
     {
         get => _status;
-        set { if (_status == value) return; _status = value; OnPropertyChanged(); }
+        set { if (_status == value) return; _status = value; OnPropertyChanged(); OnPropertyChanged(nameof(ShownStatus)); }
     }
 
     // A failed job's row turns red. The text stays the theme's colour.
@@ -103,8 +65,41 @@ public sealed class RipJob : INotifyPropertyChanged
     public bool IsError
     {
         get => _isError;
-        set { if (_isError == value) return; _isError = value; OnPropertyChanged(); }
+        set { if (_isError == value) return; _isError = value; OnPropertyChanged(); OnPropertyChanged(nameof(ShownStatus)); }
     }
+
+    // Whether this disc is the one in the player.
+    private bool _isPlaying;
+    public bool IsPlaying
+    {
+        get => _isPlaying;
+        set
+        {
+            if (_isPlaying == value) return;
+            _isPlaying = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(ShownStatus));
+            OnPropertyChanged(nameof(PlayText));
+        }
+    }
+
+    // How many titles VLC lists for the disc, set when it is loaded. Null
+    // until then.
+    private int? _tracks;
+    public int? Tracks
+    {
+        get => _tracks;
+        set { if (_tracks == value) return; _tracks = value; OnPropertyChanged(); }
+    }
+
+    // The Status column: a running or failed job's own message, otherwise
+    // Ready, or Playing while the disc is in the player.
+    public string ShownStatus =>
+        IsRunning || IsError ? Status
+        : IsPlaying          ? "Playing"
+        :                      "Ready";
+
+    public string PlayText => IsPlaying ? "Stop" : "Load Disc";
 
     private JobState _state = JobState.Ready;
     public JobState State
@@ -116,24 +111,11 @@ public sealed class RipJob : INotifyPropertyChanged
             _state = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(IsRunning));
-            OnPropertyChanged(nameof(ActionText));
-            OnPropertyChanged(nameof(CanStartOver));
+            OnPropertyChanged(nameof(ShownStatus));
         }
     }
 
     public bool IsRunning => State == JobState.Running;
-
-    // The row's button: Cancel while running, Start while Analyse is next,
-    // Continue once the chain is under way, Open on a complete disc.
-    public string ActionText =>
-        IsRunning                  ? "Cancel"
-        : Step == JobStep.Analyse  ? "Start"
-        : Step == JobStep.Complete ? "Open"
-        :                            "Continue";
-
-    // The start-over button shows once there is something to start over:
-    // a row past Analyse that is not running and still has its ISO.
-    public bool CanStartOver => !IsRunning && Step != JobStep.Analyse && HasIso;
 
     public CancellationToken Token => _cancel?.Token ?? CancellationToken.None;
 
@@ -167,245 +149,28 @@ public sealed class RipJob : INotifyPropertyChanged
 
 public enum JobState { Ready, Running, Finished }
 
-// The steps of a disc's chain after its backup, in order. Analyse, Info
-// and Rip run from the job row; Naming is done in the title list.
-// Complete: marked complete in the naming step (DiscRecord.Complete).
-public enum JobStep { Analyse, Info, Rip, Naming, Complete }
+// A disc's steps after its backup, in order. Info is the job; Naming is
+// done in the title list. Complete: marked complete in the naming step
+// (DiscRecord.Complete).
+public enum JobStep { Info, Naming, Complete }
 
-public static class DiscAnalysis
+// The DVD title table, read from a mounted backup.
+public static class DiscTitles
 {
-    // Reads every IFO on the disc and returns the record they describe.
-    // Runs on a background thread: nothing here touches the UI.
-    //
-    // A single unreadable or malformed IFO does not end the run -- it is
-    // reported through progress and the remaining IFOs are read, because
-    // one damaged title set should not cost the whole disc. Nothing
-    // readable at all is a failure.
-    public static DiscRecord ReadDisc(
-        string discName,
-        string sourcePath,
-        string menuFolder,
-        string ffmpegPath,
-        IProgress<string> progress,
-        CancellationToken token)
+    // One title record per entry in VIDEO_TS.IFO's title table. Runs on a
+    // background thread: nothing here touches the UI.
+    public static List<TitleRecord> ReadDvd(string sourcePath)
     {
         var videoTs = IfoReader.FindVideoTs(sourcePath);
-        var ifoPaths = IfoReader.ListIfoFiles(videoTs);
-
-        var record = new DiscRecord
-        {
-            Name       = discName,
-            SourcePath = videoTs,
-            CreatedUtc = DateTime.UtcNow,
-            // RipFolder is not saved; DiscStore sets it from where the
-            // record is stored.
-        };
-
-        int read = 0;
-        var problems = new List<string>();
-        var parsed   = new List<Ifo>();
-        IReadOnlyList<IfoTitle> vmgTitles = Array.Empty<IfoTitle>();
-
-        foreach (var path in ifoPaths)
-        {
-            token.ThrowIfCancellationRequested();
-
-            var name = Path.GetFileName(path);
-            progress.Report($"reading {name}");
-
-            Ifo ifo;
-            try
+        return Ifo.ReadTitles(IfoReader.ReadVmg(videoTs), IfoReader.VmgFileName)
+            .Select(t => new TitleRecord
             {
-                ifo = Ifo.Parse(IfoReader.ReadIfo(path), name);
-            }
-            catch (Exception ex) when (ex is DiscSourceException or IfoFormatException)
-            {
-                problems.Add(ex.Message);
-                continue;
-            }
-
-            try
-            {
-                // Read into lists first: a malformed offset part way
-                // through must leave the record untouched rather than
-                // half added.
-                var titles  = ifo.Kind == IfoKind.Vmg ? ReadTitles(ifo).ToList() : new List<TitleRecord>();
-                var screens = ReadScreens(ifo).ToList();
-
-                ScanScreens(videoTs, name, screens, progress, problems, token);
-
-                record.Titles.AddRange(titles);
-                record.Screens.AddRange(screens);
-                if (ifo.Kind == IfoKind.Vmg) vmgTitles = ifo.Titles();
-                parsed.Add(ifo);
-                read++;
-            }
-            catch (IfoFormatException ex)
-            {
-                problems.Add(ex.Message);
-            }
-        }
-
-        if (read == 0)
-            throw new DiscSourceException(
-                problems.Count == 0
-                    ? $"No IFO on {videoTs} could be read."
-                    : $"No IFO on {videoTs} could be read: {string.Join("; ", problems)}");
-
-        // The resolver needs every IFO's menu and title PGCs, since a
-        // button's chain can jump between the VMG and any title set.
-        FillPlaySeconds(record, parsed);
-
-        progress.Report("resolving buttons");
-        try
-        {
-            ResolveButtons(record, parsed, vmgTitles, token);
-        }
-        catch (IfoFormatException ex)
-        {
-            problems.Add($"buttons not resolved: {ex.Message}");
-        }
-
-        try
-        {
-            TitleCoverage.Apply(record, parsed.Select(i => (i.FileName, i.MenuPgcs())));
-        }
-        catch (IfoFormatException ex)
-        {
-            problems.Add($"title coverage not worked out: {ex.Message}");
-        }
-
-        MenuFrames.Extract(record, videoTs, menuFolder, ffmpegPath, progress, problems, token);
-
-        foreach (var problem in problems)
-            progress.Report($"skipped: {problem}");
-
-        return record;
-    }
-
-    // Sets each title's PlaySeconds from its title set's IFO: the playback
-    // times of the distinct PGCs its chapters start in. A title whose set
-    // could not be read keeps 0.
-    private static void FillPlaySeconds(DiscRecord record, List<Ifo> ifos)
-    {
-        var sets = ifos.Where(i => i.Kind == IfoKind.Vts)
-                       .ToDictionary(i => Resolver.DomainKey(i.FileName), i => (Pgcs: i.TitlePgcs(), Chapters: i.Chapters()));
-
-        foreach (var title in record.Titles)
-        {
-            if (!sets.TryGetValue($"vts:{title.Vts}", out var set)) continue;
-            if (title.VtsTitle < 1 || title.VtsTitle > set.Chapters.Count) continue;
-
-            title.PlaySeconds = set.Chapters[title.VtsTitle - 1]
-                .Select(ch => ch.Pgcn)
-                .Distinct()
-                .Where(n => n >= 1 && n <= set.Pgcs.Count)
-                .Sum(n => set.Pgcs[n - 1].Seconds);
-        }
-    }
-
-    // Fills each button's Resolved target, and the record's StartupTrace
-    // from the start-up run every button starts from. The command is decoded
-    // again from its saved raw bytes, which gives the same result the scan had.
-    private static void ResolveButtons(
-        DiscRecord record, List<Ifo> ifos, IReadOnlyList<IfoTitle> titles, CancellationToken token)
-    {
-        var resolver = new Resolver(ifos, titles, record.Screens);
-        record.StartupTrace = resolver.StartupTrace.ToList();
-        foreach (var screen in record.Screens)
-        {
-            token.ThrowIfCancellationRequested();
-            var domain = Resolver.DomainKey(screen.Ifo);
-            foreach (var set in screen.ButtonSets)
-                foreach (var button in set.Buttons)
-                    button.Resolved = resolver.Resolve(
-                        domain, screen.Lang, screen.Pgc, button.Number,
-                        VmCommand.Decode(Convert.FromHexString(button.Raw)));
-        }
-    }
-
-    // Fills NavPacks and ButtonSets on each screen from its cell's sectors
-    // in the IFO's menu VOB. A missing VOB or a cell that can't be read
-    // leaves that screen's buttons empty and is reported, never silent.
-    private static void ScanScreens(
-        string videoTs, string ifoName, List<ScreenRecord> screens,
-        IProgress<string> progress, List<string> problems, CancellationToken token)
-    {
-        if (screens.Count == 0) return;
-
-        MenuVob? vob;
-        try
-        {
-            vob = MenuVob.Open(videoTs, ifoName);
-        }
-        catch (DiscSourceException ex)
-        {
-            problems.Add(ex.Message);
-            return;
-        }
-        if (vob == null)
-        {
-            problems.Add($"{ifoName}: no menu VOB, so its {screens.Count} screen(s) have no buttons");
-            return;
-        }
-
-        using (vob)
-        {
-            progress.Report($"scanning {vob.FileName}");
-            foreach (var screen in screens)
-            {
-                var scan = vob.ScanCell(screen.FirstSector, screen.LastSector, token);
-                if (scan.Problem != null) problems.Add(scan.Problem);
-
-                screen.NavPacks   = scan.NavPacks;
-                screen.ButtonSets = scan.ButtonSets.Select((set, i) => new ButtonSetRecord
-                {
-                    Number  = i + 1,
-                    Buttons = set.Select(b => new ButtonRecord
-                    {
-                        Number      = b.Number,
-                        X0 = b.X0, Y0 = b.Y0, X1 = b.X1, Y1 = b.Y1,
-                        Up = b.Up, Down = b.Down, Left = b.Left, Right = b.Right,
-                        CommandText = b.Command.Text,
-                        Raw         = b.Command.Raw,
-                    }).ToList(),
-                }).ToList();
-            }
-        }
-    }
-
-    private static IEnumerable<TitleRecord> ReadTitles(Ifo ifo) =>
-        ifo.Titles().Select(t => new TitleRecord
-        {
-            Number   = t.Number,
-            Vts      = t.Vts,
-            VtsTitle = t.VtsTitle,
-            Angles   = t.Angles,
-            Chapters = t.Chapters,
-        });
-
-    // One screen per cell of every menu program chain. A PGC with no
-    // cells contributes no screen: it is a chain of commands rather than
-    // a picture. The resolver reads those from the IFO again at seam 3;
-    // they are not lost by being absent here.
-    private static IEnumerable<ScreenRecord> ReadScreens(Ifo ifo)
-    {
-        var domain = ifo.Kind == IfoKind.Vmg ? "vmg" : "vts";
-
-        foreach (var pgc in ifo.MenuPgcs())
-            foreach (var cell in pgc.Cells)
-                yield return new ScreenRecord
-                {
-                    Ifo         = ifo.FileName,
-                    Domain      = domain,
-                    Lang        = pgc.Lang,
-                    Menu        = pgc.Menu,
-                    Pgc         = pgc.Pgcn,
-                    Cell        = cell.Number,
-                    Image       = null,
-                    FirstSector = cell.FirstSector,
-                    LastSector  = cell.LastSector,
-                    NavPacks    = 0,
-                };
+                Number   = t.Number,
+                Vts      = t.Vts,
+                VtsTitle = t.VtsTitle,
+                Angles   = t.Angles,
+                Chapters = t.Chapters,
+            })
+            .ToList();
     }
 }

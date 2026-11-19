@@ -32,6 +32,8 @@ public sealed class DiscPlayer : IDisposable
     public DiscType DiscType { get; private set; }
 
     public event Action<PickResult>? BackOnMenu;
+    // VLC's title list has been read, with its count (the probe's "N titles", title 0 the menu)
+    public event Action<int>? TitlesListed;
     public event Action<MessageLevel, string>? Message;
     // Pick tracking stopped on an error it can't recover from (BdLogReader); raised on the UI thread
     public event Action<Exception>? Failed;
@@ -154,6 +156,7 @@ public sealed class DiscPlayer : IDisposable
             var duration = TimeSpan.FromMilliseconds(length);
             SendMessage(MessageLevel.Info, $"{title.Id}: {duration:hh\\:mm\\:ss} {chapters.Length} ch {title.Name}");
         }
+        TitlesListed?.Invoke(titles.Length);
     }
 
     // The picks classes don't see VLC's title list, so the names are added here

@@ -5,10 +5,11 @@
 // loading the disc records kept in it.
 //
 //   <Destination>\
-//       ISO\<DISC>.iso                    MakeMKV's backup image
+//       ISO\<DISC>.iso                    MakeMKV's backup: an image file
+//                                         for a DVD, a BDMV folder for a
+//                                         Blu-ray (see Backup*)
 //       Rip\<DISC>\                       the rips; remux reads this folder
 //           Menu\disc.json                the disc record
-//           Menu\*.png                    cached menu frames
 //       Reserve\                          space held for running jobs
 //       Logs\Backup\<DISC>.log            one per disc, overwritten on a repeat
 //       Logs\<timestamp>\<DISC>\          info/rip/naming logs
@@ -45,13 +46,41 @@ public static class DiscStore
     public static string IsoPath(string destination, string discName) =>
         Path.Combine(IsoFolder(destination), discName + ".iso");
 
+    // ── The backup ───────────────────────────────────────────────────
+    // MakeMKV writes a DVD backup as an image file and a Blu-ray backup
+    // as a BDMV folder, both at IsoPath. Everything that checks, sizes
+    // or deletes a backup goes through these, so both kinds are handled
+    // the same way.
+
+    public static bool BackupExists(string backupPath) =>
+        File.Exists(backupPath) || Directory.Exists(backupPath);
+
+    // The image's length, or every file in the folder added up. 0 when
+    // there is no backup.
+    public static long BackupBytes(string backupPath) =>
+        File.Exists(backupPath)      ? new FileInfo(backupPath).Length
+        : Directory.Exists(backupPath) ? new DirectoryInfo(backupPath)
+                                             .EnumerateFiles("*", SearchOption.AllDirectories)
+                                             .Sum(f => f.Length)
+        :                                0;
+
+    // Deletes the image, or the folder with everything in it. Nothing
+    // there is not an error.
+    public static void DeleteBackup(string backupPath)
+    {
+        if (File.Exists(backupPath))
+            File.Delete(backupPath);
+        else if (Directory.Exists(backupPath))
+            Directory.Delete(backupPath, recursive: true);
+    }
+
     public static string RipRoot(string destination) =>
         Path.Combine(destination, RipFolderName);
 
     public static string RipFolder(string destination, string discName) =>
         Path.Combine(RipRoot(destination), discName);
 
-    // The disc's Menu folder: its record and its cached menu frames.
+    // The disc's Menu folder, which holds its record.
     public static string DiscFolder(string destination, string discName) =>
         Path.Combine(RipFolder(destination, discName), MenuFolderName);
 

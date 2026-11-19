@@ -4,19 +4,22 @@
 // Rip mode's content. The Destination picker and its history, the
 // optical drive list, and one list of the Destination's discs (the
 // jobs list), each with its next step; the disc records under
-// <Destination>\Rip\<DISC>\Menu\ back it. Selecting a disc lists its
-// titles below; selecting a disc title shows a chip per
-// menu screen that names it; clicking a chip shows that screen with
-// its buttons outlined and the naming button highlighted. The picture
-// scales to its space: Fit Width fills the width and scrolls, Fit
-// Window always shows it whole (PictureFit, saved in AppSettings).
+// <Destination>\Rip\<DISC>\Menu\ back it. A disc row's Load Disc
+// lists its titles below and plays its backup in the player
+// (DiscPlayer) in the middle panel; Stop stops it. The player takes the
+// arrow keys and Enter while it has focus (click it to give it focus);
+// each pick, once the disc is back on its menu, opens a Played box
+// with what the disc's record has from the info stage for the titles
+// played. Player messages go to player.log in the disc's run log
+// folder. The player is created the first time a disc is played,
+// closed when Rip mode is left, and disposed when the app closes.
 //
-// The title list (a DataGrid) is also where titles are named. It has one
-// row per .mkv in the disc's rip folder (TitleNaming.BuildRows): the Name
-// cell edits in place and the Type dropdown picks Main title or a Plex
-// extras type, unless the row's Delete box is ticked, and one
-// Apply button above the list applies every changed row. Right-click a
-// row to play its file in MPV.
+// The title list (a DataGrid) is where titles are named. It has one row
+// per title MakeMKV's info run joined, from the disc's record
+// (TitleNaming.BuildRows): the Name cell edits in place, the Type
+// dropdown picks Main title or a Plex extras type, and one Apply button
+// above the list saves every changed row to the record. Only named
+// titles are ripped.
 //
 // The drive row owns the backup. Its button reads Backup, then
 // Cancel while MakeMKV runs (the row fills green with MakeMKV's own
@@ -27,19 +30,15 @@
 // a message box refuses it. A running backup holds its space in a
 // reserve file that shrinks as the ISO grows.
 //
-// A completed backup adds a row to the jobs list. Its Step is the
-// disc's next step and its button reads Start, then Continue, which
-// picks up at that step (at Naming it opens the disc's titles); the
-// start-over button runs the chain again from Analyse. The chain runs
-// three stages from the backup ISO, not the drive:
-// Analyse (the ISO is mounted with no drive letter by IsoMount, the
-// IFOs and menus are read on a background thread, the ISO is
-// unmounted), Info (`makemkvcon info` on the ISO file, MakeMkvInfo)
-// and Rip (`makemkvcon mkv` into Rip\<DISC>\, then RipBinder ties each
-// title to its file, MakeMkvRip). The record is saved after each. The disc is not needed after its
-// backup, so Eject is safe at any time. The ISO's IFOs were measured
-// byte-identical to the disc's. The rest of the engine joins the
-// same job as each seam lands.
+// A completed backup adds a row to the disc list and starts its info
+// job (RunInfoJobAsync), which works from the backup, not the drive. A
+// DVD's title table is read first: the ISO is mounted with no drive
+// letter by IsoMount, VIDEO_TS.IFO is read, the ISO is unmounted. Then
+// `makemkvcon info` on the backup (MakeMkvInfo), which for a Blu-ray
+// also checks each playlist's chapters with mkvmerge. The record is
+// saved when it finishes. A Destination load starts the same job for
+// any disc whose info never finished. The disc is not needed after its
+// backup, so Eject is safe at any time.
 // ============================================================
 
 using System.Collections.ObjectModel;
@@ -54,8 +53,6 @@ using System.Windows.Input;
 using System.Runtime.InteropServices;
 using System.Windows.Interop;
 using System.Windows.Media;
-using System.Windows.Media.Imaging;
-using System.Windows.Shapes;
 using Microsoft.Win32;
 using Microsoft.Win32.SafeHandles;
 
@@ -65,7 +62,6 @@ public partial class RipView : UserControl
 {
     // ── Collections the view binds to ────────────────────────────────
     public ObservableCollection<OpticalDriveRow> Drives { get; } = new();
-    public ObservableCollection<ScreenChip>      Chips  { get; } = new();
     public ObservableCollection<RipJob>          Jobs   { get; } = new();
     public ObservableCollection<NamingRow>       TitleRows { get; } = new();
 
@@ -97,23 +93,42 @@ public partial class RipView : UserControl
     // would unmount it under the other.
     private readonly HashSet<string> _busyIsos = new(StringComparer.OrdinalIgnoreCase);
 
-    private const string NoTitleSelectedText =
-        "Select a disc title to see the menu screen it was named from.";
+    // The player, created the first time a disc is played. The disc it is
+    // playing, that disc's row (which turns red if the player fails), and
+    // the player.log its messages go to.
+    private DiscPlayer? _player;
+    private DiscRecord? _playerDisc;
+    private RipJob?     _playerJob;
+    private string?     _playerLogPath;
+    private readonly object _playerLogLock = new();
 
-    private const string SelectDiscText = "Click Continue on a disc above to see its titles.";
+    private const string PlayerLogFileName = "player.log";
+
+    // Whether the player has the keys (its border is green). Cleared only
+    // when focus moves to another control in the main window
+    // (PlayerFrame_LostKeyboardFocus): a click on VideoView's overlay moves
+    // focus into the overlay's own window, and a message box takes it to
+    // its own, and neither takes the keys away.
+    private bool _playerHasKeys;
+
+    private const string KeyboardOnlyText =
+        "The player only takes the keyboard: use the arrow keys to move and Enter to choose.";
+
+    private const string NoDiscPlayingText = "Click Load Disc on a disc to play it.";
+
+    private const string SelectDiscText = "Click Load Disc on a disc above to see its titles.";
 
     public RipView()
     {
         InitializeComponent();
         DriveList.ItemsSource = Drives;
-        ChipStrip.ItemsSource = Chips;
         JobList.ItemsSource   = Jobs;
         TitleList.ItemsSource = TitleRows;
         ClearTitles(SelectDiscText);
 
-        // Checking the saved choice raises FitRadio_Checked, which applies it.
-        var fitRadio = AppSettings.Instance.RipPictureFit == PictureFit.Window ? FitWindowRadio : FitWidthRadio;
-        fitRadio.IsChecked = true;
+        // Leaving Rip mode stops the disc; closing the app releases VLC.
+        IsVisibleChanged += (_, _) => { if (!IsVisible) ClosePlayer(); };
+        Dispatcher.ShutdownStarted += (_, _) => _player?.Dispose();
 
         // Complete discs drop out of view while the box is ticked. Checking
         // the saved choice raises HideComplete_Changed, which refreshes it.
@@ -213,12 +228,15 @@ public partial class RipView : UserControl
         foreach (var disc in DiscStore.LoadAll(_destination, problems))
             _records.Add(disc);
 
-        var loaded = _records.Count == 1 ? "1 disc loaded." : $"{_records.Count} discs loaded.";
+        var loaded = DiscCountText();
         StatusText.Text = problems.Count == 0
             ? loaded
             : $"{loaded} Could not read {problems.Count}: {string.Join("; ", problems)}";
         StatusText.ToolTip = problems.Count == 0 ? null : string.Join("\n", problems);
     }
+
+    private string DiscCountText() =>
+        _records.Count == 1 ? "1 disc loaded." : $"{_records.Count} discs loaded.";
 
     // ── Drives ───────────────────────────────────────────────────────
     // Windows reports a mounted ISO as an optical drive too, so a mounted
@@ -340,7 +358,7 @@ public partial class RipView : UserControl
         // and nothing is deleted. Yes to Overwrite deletes the old ISO only
         // after the space check below has passed.
         bool overwrite = false;
-        if (File.Exists(isoPath))
+        if (DiscStore.BackupExists(isoPath))
         {
             if (!Confirm($"{name} already exists. Overwrite?", "Backup"))
             {
@@ -367,7 +385,7 @@ public partial class RipView : UserControl
         {
             needed = DiskSpace.ReservationFor(new DriveInfo(drive.Letter).TotalSize);
             free   = DiskSpace.FreeBytes(destination);
-            if (overwrite) free += new FileInfo(isoPath).Length;
+            if (overwrite) free += DiscStore.BackupBytes(isoPath);
         }
         catch (Exception ex) when (ex is IOException or Win32Exception or UnauthorizedAccessException)
         {
@@ -389,11 +407,11 @@ public partial class RipView : UserControl
         {
             try
             {
-                File.Delete(isoPath);
+                DiscStore.DeleteBackup(isoPath);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                StatusText.Text = $"{name}: the existing ISO could not be removed: {ex.Message}";
+                StatusText.Text = $"{name}: the existing backup could not be removed: {ex.Message}";
                 return;
             }
         }
@@ -442,7 +460,7 @@ public partial class RipView : UserControl
         var progress = new Progress<MakeMkvProgress>(bars => drive.Progress = bars.Total);
 
         using var shrinkStop = new CancellationTokenSource();
-        var shrinking = ShrinkWhileRunningAsync(reservation, () => FileLength(isoPath), shrinkStop.Token);
+        var shrinking = ShrinkWhileRunningAsync(reservation, () => DiscStore.BackupBytes(isoPath), shrinkStop.Token);
 
         try
         {
@@ -450,8 +468,9 @@ public partial class RipView : UserControl
                 makeMkv, drive.Letter, name, isoPath, logPath, progress, drive.BackupToken));
 
             drive.FinishBackup(DriveState.Done);
-            AddOrResetJob(name, drive.Letter, destination);
+            var job = AddOrResetJob(name, drive.Letter, destination);
             StatusText.Text = $"{name} backed up to {isoPath}.";
+            _ = RunInfoJobAsync(job);
         }
         catch (OperationCanceledException)
         {
@@ -491,17 +510,6 @@ public partial class RipView : UserControl
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }
     }
-
-    private static long FileLength(string path)
-    {
-        var file = new FileInfo(path);
-        return file.Exists ? file.Length : 0;
-    }
-
-    private static long RipBytes(string ripFolder) =>
-        Directory.Exists(ripFolder)
-            ? Directory.GetFiles(ripFolder, "*.mkv").Sum(FileLength)
-            : 0;
 
     // The MakeMKV path from Preferences, or null after a message box
     // saying what is wrong with it. Checked on Backup only: a job row
@@ -564,47 +572,47 @@ public partial class RipView : UserControl
 
     // ── Jobs ─────────────────────────────────────────────────────────
 
-    // Cancel while running; otherwise Start or Continue from the row's
-    // next step. Naming happens in the title list, so a disc at Naming
-    // opens its titles there, and Open on a complete disc lists them
-    // read-only.
-    private async void JobAction_Click(object sender, RoutedEventArgs e)
+    // Load Disc lists the disc's titles and plays it; Stop stops it and
+    // clears the titles, so the panel never shows a disc that isn't loaded.
+    private void PlayButton_Click(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is not RipJob job) return;
 
-        if (job.IsRunning)
-            job.Cancel();
-        else if (job.Step is JobStep.Naming or JobStep.Complete)
-            OpenTitles(job);
+        if (job.IsPlaying)
+        {
+            ClearTitles(SelectDiscText);   // also stops the player
+            JobList.SelectedItem = null;
+        }
         else
-            await RunJobAsync(job, job.Step);
+        {
+            OpenTitles(job);
+        }
     }
 
-    // The start-over button and the row's right-click Start Over: the whole
-    // chain again from Analyse. Rips already there are replaced only after
-    // the overwrite question RunJobAsync asks.
-    private async void StartOver_Click(object sender, RoutedEventArgs e)
+    private void CancelJob_Click(object sender, RoutedEventArgs e)
     {
-        if ((sender as FrameworkElement)?.DataContext is not RipJob { CanStartOver: true } job) return;
-        await RunJobAsync(job, JobStep.Analyse);
+        if ((sender as FrameworkElement)?.DataContext is RipJob job)
+            job.Cancel();
     }
 
     // Lists the disc's titles below and selects its row, so the row shows
     // which disc is open. Selecting a row by clicking it lists nothing.
+    // Also plays the disc's backup in the player.
     private void OpenTitles(RipJob job)
     {
         JobList.SelectedItem = job;
         ShowTitlesFor(job);
+        PlayDisc(job);
     }
 
-    // Rebuilds the jobs list from what is on disk under the Destination:
-    // one row per disc with a record, and one per disc backed up but not
-    // yet analysed (its backup log ends "Backup complete" and its ISO is
-    // still in ISO\). A row stays after its ISO is deleted; only starting
-    // over needs the ISO. A disc with a record shows its counts and its
-    // next step; one without shows "ready" with Analyse next. Running jobs
-    // are left alone, since they are real work in progress; every other
-    // row is rebuilt.
+    // Rebuilds the disc list from what is on disk under the Destination:
+    // one row per disc with a record, and one per disc backed up but with
+    // no record yet (its backup log ends "Backup complete" and its backup
+    // is still in ISO\). A row stays after its backup is deleted. Running
+    // jobs are left alone, since they are real work in progress; every
+    // other row is rebuilt. A disc whose info never finished (no record,
+    // or a record with no title joined) gets its info job started, as it
+    // would have after its backup.
     private void RebuildJobs()
     {
         foreach (var job in Jobs.Where(j => !j.IsRunning).ToList())
@@ -618,21 +626,23 @@ public partial class RipView : UserControl
         var names = _records.Select(r => r.Name)
                             .Concat(backups.Keys)
                             .Distinct(StringComparer.OrdinalIgnoreCase);
+        var unfinished = new List<RipJob>();
         foreach (var name in names)
         {
             if (FindJob(name, _destination) != null) continue;   // running
 
-            var hasIso = File.Exists(DiscStore.IsoPath(_destination, name));
-            var record = _records.FirstOrDefault(d => d.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
-            if (record == null && !hasIso) continue;
+            var hasBackup = DiscStore.BackupExists(DiscStore.IsoPath(_destination, name));
+            var record    = _records.FirstOrDefault(d => d.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (record == null && !hasBackup) continue;
 
-            var job = new RipJob(name, backups.GetValueOrDefault(name)?.Drive ?? "", _destination) { HasIso = hasIso };
+            var job = new RipJob(name, backups.GetValueOrDefault(name)?.Drive ?? "", _destination);
             if (record != null)
             {
                 job.Status = RecordCounts(record);
                 job.Step   = NextStep(record);
             }
             AddJob(job);
+            if (job.Step == JobStep.Info && hasBackup) unfinished.Add(job);
         }
 
         if (problems.Count > 0)
@@ -640,16 +650,21 @@ public partial class RipView : UserControl
             StatusText.Text    = $"{StatusText.Text} Could not read {problems.Count} backup log(s): {string.Join("; ", problems)}";
             StatusText.ToolTip = string.Join("\n", problems);
         }
+
+        foreach (var job in unfinished)
+            _ = RunInfoJobAsync(job);
     }
 
     // A backup of a disc that already has a row resets that row rather
-    // than adding a second one for the same ISO.
-    private void AddOrResetJob(string disc, string drive, string destination)
+    // than adding a second one for the same backup.
+    private RipJob AddOrResetJob(string disc, string drive, string destination)
     {
         var existing = FindJob(disc, destination);
         if (existing != null && !existing.IsRunning)
             Jobs.Remove(existing);
-        AddJob(new RipJob(disc, drive, destination) { HasIso = true });
+        var job = new RipJob(disc, drive, destination);
+        AddJob(job);
+        return job;
     }
 
     // Rows are kept in disc-name order.
@@ -681,164 +696,78 @@ public partial class RipView : UserControl
             j.Disc.Equals(disc, StringComparison.OrdinalIgnoreCase) &&
             j.Destination.Equals(destination, StringComparison.OrdinalIgnoreCase));
 
-    // The next step for a disc with a record. Analyse is done, since it is
-    // what writes the record. The rip is done when the record has the file
-    // list a finished rip writes and every file on it not deleted in
-    // naming is in the rip folder, whether or not any title was bound.
-    // Info is done once any title has the name its rip will get. A disc is
-    // Complete only once it has been marked complete (DiscRecord.Complete).
-    private static JobStep NextStep(DiscRecord record)
-    {
-        var onDisk = Directory.Exists(record.RipFolder)
-            ? Directory.GetFiles(record.RipFolder, "*.mkv")
-                       .Select(f => System.IO.Path.GetFileName(f))
-                       .ToHashSet(StringComparer.OrdinalIgnoreCase)
-            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var ripDone = record.RipFiles is { } ripped &&
-                      ripped.Where(f => !f.Deleted).All(f => onDisk.Contains(f.Name));
+    // The next step for a disc with a record: Info until MakeMKV's info run
+    // has joined a title, then Naming. A disc is Complete only once it has
+    // been marked complete (DiscRecord.Complete).
+    private static JobStep NextStep(DiscRecord record) =>
+        record.Complete                            ? JobStep.Complete
+        : record.Titles.Any(t => t.RipName != null) ? JobStep.Naming
+        :                                             JobStep.Info;
 
-        return record.Complete                             ? JobStep.Complete
-             : ripDone                                     ? JobStep.Naming
-             : record.Titles.Any(t => t.RipName != null)  ? JobStep.Rip
-             :                                              JobStep.Info;
-    }
-
+    // The row's counts: the titles the list shows, and how many are named.
     private static string RecordCounts(DiscRecord record)
     {
-        var counts = $"{Count(record.Titles.Count, "title")}, {Count(record.Screens.Count, "screen")}";
-        var bound  = record.Titles.Count(t => t.Bound);
-        return bound == 0 ? counts : $"{counts}, {bound} bound";
+        var titles = record.Titles.Where(t => t.RipName != null && t.SameAs == null).ToList();
+        var named  = titles.Count(t => t.Name.Length > 0);
+        return named == 0 ? Count(titles.Count, "title") : $"{Count(titles.Count, "title")}, {named} named";
     }
 
-    // A job's three stages, all from the disc's backup ISO:
-    //   Analyse  the IFO read. The ISO is mounted with no drive letter,
-    //            read through its volume path, and unmounted again
-    //            whether the read succeeds, fails or is cancelled.
-    //   Info     `makemkvcon info` on the ISO file itself (no mount),
-    //            which fills each title's runtime, size, segments and
-    //            the name its rip will get.
-    //   Rip      `makemkvcon mkv` into Rip\<DISC>\, then the binder ties
-    //            each title to its file.
-    // The record is saved after each stage, so a later stage that fails
-    // leaves the earlier stages' results on disk. Continue picks up at
-    // `from`: Info and Rip start from the saved record, which holds what
-    // they need from the stages before them.
-    //
-    // Checked when Start is clicked, before anything runs: the ISO is
-    // there; rips already in Rip\<DISC>\ are overwritten only on Yes;
-    // and the Destination has ReservationFactor x the ISO's size free. That space is then held
-    // by a reserve file for the whole job, shrinking as the rips grow,
-    // the same way a backup holds its space.
-    private async Task RunJobAsync(RipJob job, JobStep from)
+    // The info job, from the disc's backup:
+    //   DVD      the title table: the ISO is mounted with no drive letter,
+    //            VIDEO_TS.IFO is read through its volume path, and the ISO
+    //            is unmounted again whether the read succeeds, fails or is
+    //            cancelled. Then `makemkvcon info` on the ISO file itself.
+    //   Blu-ray  `makemkvcon info` on the BDMV folder, then mkvmerge's
+    //            chapter check for each playlist (MakeMkvInfo).
+    // The record is created here, so a backup redone starts from nothing,
+    // and saved when the job finishes.
+    private async Task RunInfoJobAsync(RipJob job)
     {
-        var isoPath   = DiscStore.IsoPath(job.Destination, job.Disc);
-        var ripFolder = DiscStore.RipFolder(job.Destination, job.Disc);
+        var backup = DiscStore.IsoPath(job.Destination, job.Disc);
 
-        if (_busyIsos.Contains(isoPath))
+        if (_busyIsos.Contains(backup))
         {
             job.Status = $"{job.Disc} is already being read.";
             return;
         }
-        if (!File.Exists(isoPath))
+        if (!DiscStore.BackupExists(backup))
         {
-            job.Status = $"{isoPath} was not found.";
+            job.Status = $"{backup} was not found.";
             return;
         }
-        // Rips already there: asked, as Backup asks about an existing ISO.
-        // Yes deletes them only after the space check has passed, and
-        // they count as free space for that check.
-        var oldRips = Directory.Exists(ripFolder) ? Directory.GetFiles(ripFolder, "*.mkv") : Array.Empty<string>();
-        if (oldRips.Length > 0 && !Confirm($"{job.Disc} has already been ripped. Overwrite?", "Rip"))
-        {
-            job.Status = $"{job.Disc} left as it was.";
-            return;
-        }
-
-        SpaceReservation reservation;
-        try
-        {
-            var needed = DiskSpace.ReservationFor(FileLength(isoPath));
-            if (DiskSpace.FreeBytes(job.Destination) + oldRips.Sum(FileLength) < needed)
-            {
-                MessageBox.Show(
-                    "Insufficient Disk Space Available",
-                    "Insufficient Disk Space",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Warning);
-                return;
-            }
-            foreach (var file in oldRips)
-                File.Delete(file);
-
-            // Claimed now, on the UI thread, so the next click's check
-            // already sees this space gone.
-            reservation = SpaceReservation.Create(job.Destination, job.Disc, needed);
-        }
-        catch (Exception ex) when (ex is IOException or Win32Exception or UnauthorizedAccessException)
-        {
-            job.Status = $"{job.Disc}: {ex.Message}";
-            return;
-        }
+        if (ReferenceEquals(_playerJob, job)) ClosePlayer();
 
         job.Begin();
-        _busyIsos.Add(isoPath);
-        var runStarted = DateTime.Now;
-        var makeMkv    = AppSettings.Instance.MakeMKV_Path;
-        var deleteIso  = AppSettings.Instance.IsoDeleteAfter == IsoDeleteAfter.Rip;
+        job.Step = JobStep.Info;
+        _busyIsos.Add(backup);
+        var makeMkv  = AppSettings.Instance.MakeMKV_Path;
+        var mkvMerge = AppSettings.Instance.MKVMerge_Path;
 
-        // Progress is created here, on the UI thread, so its callbacks
-        // come back to the UI thread and can touch the job's bindings.
-        var progress    = new Progress<string>(message => job.Status = message);
-        var ripProgress = new Progress<RipProgress>(p => job.Status = p.Files > 0
-            ? $"({p.File}/{p.Files}) ripping {p.Current:P0} \u00B7 {p.Total:P0} total"
-            : $"ripping {p.Total:P0}");
-
-        using var shrinkStop = new CancellationTokenSource();
-        var shrinking = ShrinkWhileRunningAsync(reservation, () => RipBytes(ripFolder), shrinkStop.Token);
+        // Created here, on the UI thread, so its callbacks come back to the
+        // UI thread and can touch the job's bindings.
+        var progress = new Progress<string>(message => job.Status = message);
 
         try
         {
-            job.Step = from;
-            var record = from == JobStep.Analyse
-                ? await ReadIfosAsync(job, isoPath, progress)
-                : (await Task.Run(() => DiscStore.Load(job.Destination, job.Disc))
-                   ?? throw new FileNotFoundException($"The saved record for {job.Disc} was not found. Start it over."));
-            var infoLog = DiscStore.StageLogPath(job.Destination, runStarted, job.Disc, MakeMkvInfo.LogFileName);
+            var record = new DiscRecord
+            {
+                Name       = job.Disc,
+                SourcePath = backup,
+                BluRay     = Directory.Exists(backup),
+                CreatedUtc = DateTime.UtcNow,
+            };
+            if (!record.BluRay)
+                record.Titles = await ReadDvdTitlesAsync(job, backup);
+
+            var infoLog = DiscStore.StageLogPath(job.Destination, DateTime.Now, job.Disc, MakeMkvInfo.LogFileName);
             record.RunLogFolder = System.IO.Path.GetDirectoryName(infoLog);
+
+            job.Status = "running MakeMKV info";
+            await Task.Run(() => MakeMkvInfo.RunAsync(makeMkv, mkvMerge, backup, infoLog, record, progress, job.Token));
             await Task.Run(() => DiscStore.Save(job.Destination, record));
-
-            if (from <= JobStep.Info)
-            {
-                job.Step = JobStep.Info;
-                job.Status = "running MakeMKV info";
-                await Task.Run(() => MakeMkvInfo.RunAsync(makeMkv, isoPath, infoLog, record, progress, job.Token));
-                await Task.Run(() => DiscStore.Save(job.Destination, record));
-            }
-
-            job.Step = JobStep.Rip;
-            job.Status = "starting MakeMKV rip";
-            var ripLog = DiscStore.StageLogPath(job.Destination, runStarted, job.Disc, MakeMkvRip.LogFileName);
-            await Task.Run(() => MakeMkvRip.RunAsync(makeMkv, isoPath, ripFolder, ripLog, record, ripProgress, job.Token));
-            await Task.Run(() => DiscStore.Save(job.Destination, record));
-
-            // "After Rip": the ISO goes once the rip and binding are saved, so
-            // a delete that fails fails the job but loses nothing. Logged in
-            // rip.log after MakeMkvRip's own lines.
-            if (deleteIso)
-            {
-                File.Delete(isoPath);
-                File.AppendAllText(ripLog, $"ISO deleted: {isoPath}{Environment.NewLine}");
-            }
 
             job.Step = NextStep(record);
             job.Finish(RecordCounts(record), false);
-
-            // The row stays without its ISO; only starting over needs it.
-            if (deleteIso)
-            {
-                job.HasIso = false;
-                StatusText.Text = $"{job.Disc} ripped ({RecordCounts(record)}); its ISO was deleted.";
-            }
         }
         catch (OperationCanceledException)
         {
@@ -852,28 +781,23 @@ public partial class RipView : UserControl
         }
         finally
         {
-            shrinkStop.Cancel();
-            try { await shrinking; } catch (OperationCanceledException) { }
-            reservation.Dispose();
-            _busyIsos.Remove(isoPath);
+            _busyIsos.Remove(backup);
 
-            // Whatever stage it stopped at, the saved record is what the
-            // titles show. Only this disc's record is reloaded, so names
-            // being typed for another disc are kept; this disc's titles
-            // are listed again if they are the ones open.
-            if (job.Destination.Equals(_destination, StringComparison.OrdinalIgnoreCase))
-            {
-                RefreshDiscEntry(job.Disc);
-                if (_selectedDisc?.Name.Equals(job.Disc, StringComparison.OrdinalIgnoreCase) == true)
-                    ShowTitlesFor(job);
-            }
+            // Only this disc's record is reloaded, so names being typed for
+            // another disc are kept.
+            // The status line's disc count follows, since the job may have
+            // just created the disc's record.
+            if (job.Destination.Equals(_destination, StringComparison.OrdinalIgnoreCase) &&
+                RefreshDiscEntry(job.Disc))
+                StatusText.Text = DiscCountText();
         }
     }
 
     // Reloads one disc's record into the disc list without touching what
     // the view is showing. A record that can no longer be read leaves the
-    // list, and the reason goes to the status line.
-    private void RefreshDiscEntry(string discName)
+    // list, and the reason goes to the status line. False when a record
+    // could not be read.
+    private bool RefreshDiscEntry(string discName)
     {
         var problems = new List<string>();
         var fresh = DiscStore.LoadAll(_destination, problems)
@@ -885,23 +809,24 @@ public partial class RipView : UserControl
         if (fresh == null)
         {
             if (at >= 0) _records.RemoveAt(at);
-            return;
+            return problems.Count == 0;
         }
         if (at >= 0)
         {
             _records[at] = fresh;
-            return;
+            return problems.Count == 0;
         }
 
         at = 0;
         while (at < _records.Count && string.Compare(_records[at].Name, fresh.Name, StringComparison.OrdinalIgnoreCase) < 0)
             at++;
         _records.Insert(at, fresh);
+        return problems.Count == 0;
     }
 
-    // Mounts the ISO, reads its IFOs into a new record, and unmounts it
-    // again before returning, so nothing after this holds the mount.
-    private async Task<DiscRecord> ReadIfosAsync(RipJob job, string isoPath, IProgress<string> progress)
+    // Mounts the DVD's ISO, reads its title table, and unmounts it again
+    // before returning, so nothing after this holds the mount.
+    private async Task<List<TitleRecord>> ReadDvdTitlesAsync(RipJob job, string isoPath)
     {
         IsoMount? mount = null;
         try
@@ -913,16 +838,8 @@ public partial class RipView : UserControl
             mount = await IsoMount.MountAsync(isoPath);
             job.Token.ThrowIfCancellationRequested();
 
-            var record = await Task.Run(() => DiscAnalysis.ReadDisc(
-                job.Disc, mount.VolumePath,
-                DiscStore.DiscFolder(job.Destination, job.Disc),
-                AppSettings.Instance.FFmpeg_Path,
-                progress, job.Token), job.Token);
-
-            // The volume path means nothing once the ISO is unmounted;
-            // the record names the ISO it was read from instead.
-            record.SourcePath = isoPath;
-            return record;
+            job.Status = "reading the title table";
+            return await Task.Run(() => DiscTitles.ReadDvd(mount.VolumePath), job.Token);
         }
         finally
         {
@@ -1002,7 +919,7 @@ public partial class RipView : UserControl
         var disc = _records.FirstOrDefault(d => d.Name.Equals(job.Disc, StringComparison.OrdinalIgnoreCase));
         if (disc == null)
         {
-            ClearTitles($"{job.Disc} has no titles until it has been analysed.");
+            ClearTitles($"{job.Disc} has no titles until its info run has finished.");
             return;
         }
         ShowDiscTitles(disc);
@@ -1037,13 +954,12 @@ public partial class RipView : UserControl
         UpdatePanelButtons();
     }
 
-    // No disc's titles: the list area says why, and the picture is cleared.
+    // No disc's titles: the list area says why, and the player stops.
     private void ClearTitles(string message)
     {
         _selectedDisc = null;
         TitleRows.Clear();
-        Chips.Clear();
-        ShowPlaceholder(NoTitleSelectedText);
+        ClosePlayer();
 
         DiscTitlesHeader.Visibility  = Visibility.Collapsed;
         TitleList.Visibility         = Visibility.Collapsed;
@@ -1072,29 +988,17 @@ public partial class RipView : UserControl
 
     // ── Naming ───────────────────────────────────────────────────────
 
-    // Clicking into a row's Delete box selects the row, so its menu screen
-    // shows while it is being worked on.
+    // Clicking into a row's Type box selects the row, so the row being
+    // worked on is the one highlighted.
     private void TitleRow_PreviewGotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
     {
         if (sender is DataGridRow row)
             row.IsSelected = true;
     }
 
-    // Only the Name column is editable, and not on a row ticked for Delete:
-    // the edit is refused and the status line says why.
-    private void TitleList_BeginningEdit(object sender, DataGridBeginningEditEventArgs e)
-    {
-        if (e.Row.Item is not NamingRow { CanEdit: false }) return;
-
-        e.Cancel = true;
-        StatusText.Text = TitleNaming.UntickDeleteToEdit;
-    }
-
     // A click in a Name cell selects its row and starts the edit straight
-    // away; the DataGrid's own rule is a second click. BeginEdit goes
-    // through TitleList_BeginningEdit, so a row ticked for Delete still
-    // refuses. The click is not handled here, so it carries on into the
-    // text box and places the caret.
+    // away; the DataGrid's own rule is a second click. The click is not
+    // handled here, so it carries on into the text box and places the caret.
     private void NameCell_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (sender is not DataGridCell { IsEditing: false } cell) return;
@@ -1136,26 +1040,18 @@ public partial class RipView : UserControl
         CompleteButton.IsEnabled = !complete && !changes;
     }
 
-    private void PlayInMpv_Click(object sender, RoutedEventArgs e)
-    {
-        if ((sender as FrameworkElement)?.DataContext is not NamingRow row || _selectedDisc is null) return;
-        MainWindow.TryLaunch(AppSettings.Instance.MPV_Path, System.IO.Path.Combine(_selectedDisc.RipFolder, row.FileName));
-    }
-
-    // Applies every changed row: the ticked Deletes first, which can free a
-    // name a rename wants, then the renames. Every row is checked before
-    // anything changes; any problem stops the whole Apply and lists them.
-    // One confirm covers the lot. It stops at the first file that can't be
-    // changed, keeping what was done before it. A deleted file's row leaves
-    // the list.
+    // Saves every changed row's name and type to the disc's record, the way
+    // Remux and Transcode save their settings file. Every changed row is
+    // checked first, and the names across all rows; any problem stops the
+    // whole Apply and lists them. One confirm covers the lot.
     private void Apply_Click(object sender, RoutedEventArgs e)
     {
         if (_selectedDisc is not { } disc) return;
 
-        // A running Start rewrites this disc's rips and record under the rows.
+        // A running info job rewrites this disc's record under the rows.
         if (FindJob(disc.Name, _destination) is { IsRunning: true })
         {
-            StatusText.Text = $"{disc.Name} is being ripped. Apply once it finishes.";
+            StatusText.Text = $"{disc.Name} is being read. Apply once it finishes.";
             return;
         }
 
@@ -1171,52 +1067,35 @@ public partial class RipView : UserControl
         var changed = TitleRows.Where(r => r.HasChanges).ToList();
         if (changed.Count == 0) return;
 
-        var deletes = changed.Where(r => r.Delete).ToList();
-        var freed   = deletes.Select(r => r.FileName).ToHashSet(StringComparer.OrdinalIgnoreCase);
-
         var problems = changed
-            .Select(r => (Row: r, Problem: TitleNaming.Problem(r, disc, freed)))
+            .Select(r => (Row: r, Problem: TitleNaming.Problem(r)))
             .Where(x => x.Problem != null)
-            .Select(x => $"{RowLabel(x.Row)}: {x.Problem}")
+            .Select(x => $"Title {x.Row.Number}: {x.Problem}")
+            .Concat(TitleNaming.Duplicates(TitleRows))
             .ToList();
-        var renames = changed.Where(r => !r.Delete).ToList();
-        problems.AddRange(renames
-            .GroupBy(TitleNaming.TargetFile, StringComparer.OrdinalIgnoreCase)
-            .Where(g => g.Count() > 1)
-            .Select(g => $"{string.Join(", ", g.Select(RowLabel))}: the same name, \"{g.Key}\", is typed more than once."));
         if (problems.Count > 0)
         {
             MessageBox.Show(string.Join("\n", problems), "Cannot Apply", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
-        var message = $"Rename {Count(renames.Count, "file")} and delete {deletes.Count}?";
-        var untagged = renames
+        var message = $"Save {Count(changed.Count, "name")}?";
+        var untagged = changed
             .Where(r => r.Type == TitleType.MainTitle && !TitleNaming.LooksPlexReady(TitleNaming.StripExtension(r.Name)))
             .ToList();
         if (untagged.Count > 0)
             message += $"\n\nNo year or episode number in: {string.Join(", ", untagged.Select(r => TitleNaming.StripExtension(r.Name)))}";
         if (!Confirm(message, "Apply")) return;
 
-        int done = 0;
         try
         {
-            foreach (var row in deletes)
-            {
-                TitleNaming.DeleteFile(row, disc, _destination);
-                TitleRows.Remove(row);
-                done++;
-            }
-            foreach (var row in renames)
-            {
-                TitleNaming.Rename(row, disc, _destination);
-                done++;
-            }
-            StatusText.Text = $"Renamed {renames.Count}, deleted {deletes.Count}.";
+            foreach (var row in changed)
+                TitleNaming.Apply(row, disc, _destination);
+            DiscStore.Save(_destination, disc);
+            StatusText.Text = $"Saved {Count(changed.Count, "name")}.";
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            StatusText.Text = $"{done} of {changed.Count} changes applied.";
             MessageBox.Show(ex.Message, "Apply Failed", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         UpdateJobRow(disc);
@@ -1234,29 +1113,27 @@ public partial class RipView : UserControl
         RefreshJobFilter();
     }
 
-    private static string RowLabel(NamingRow row) =>
-        row.Title is { } title ? $"Title {title.Number}" : row.FileName;
-
-    // Marks the disc complete. Every file left must be named first. With the
-    // "when the disc is marked complete" setting and the ISO still there,
+    // Marks the disc complete. Every named title must have been ripped
+    // first. With the "when the disc is marked complete" setting and the
+    // ISO still there,
     // the ISO is deleted too, after Confirm; Cancel leaves everything as it
     // was. The ISO goes before the mark, so a delete that fails changes
-    // nothing. The row stays, without the start-over button.
+    // nothing. The row stays.
     private void Complete_Click(object sender, RoutedEventArgs e)
     {
         if (_selectedDisc is not { } disc) return;
 
         if (FindJob(disc.Name, _destination) is { IsRunning: true })
         {
-            StatusText.Text = $"{disc.Name} is being ripped. Mark it complete once it finishes.";
+            StatusText.Text = $"{disc.Name} is being read. Mark it complete once it finishes.";
             return;
         }
 
-        var unnamed = TitleNaming.UnnamedFiles(disc);
-        if (unnamed.Count > 0)
+        var notRipped = TitleNaming.NamedNotRipped(disc);
+        if (notRipped.Count > 0)
         {
             MessageBox.Show(
-                $"These files have no name and type yet:\n{string.Join("\n", unnamed)}",
+                $"These named titles have not been ripped yet:\n{string.Join("\n", notRipped.Select(t => $"Title {t.Number}: {t.Name}"))}",
                 "Cannot Complete",
                 MessageBoxButton.OK,
                 MessageBoxImage.Warning);
@@ -1264,7 +1141,7 @@ public partial class RipView : UserControl
         }
 
         var iso       = DiscStore.IsoPath(_destination, disc.Name);
-        var deleteIso = AppSettings.Instance.IsoDeleteAfter == IsoDeleteAfter.Naming && File.Exists(iso);
+        var deleteIso = AppSettings.Instance.IsoDeleteAfter == IsoDeleteAfter.Naming && DiscStore.BackupExists(iso);
         if (deleteIso &&
             !ConfirmDialog.Show(Window.GetWindow(this), $"Mark {disc.Name} complete? Its ISO will be deleted.", "Complete"))
             return;
@@ -1273,10 +1150,9 @@ public partial class RipView : UserControl
         {
             if (deleteIso)
             {
-                File.Delete(iso);
+                if (ReferenceEquals(_playerDisc, disc)) ClosePlayer();
+                DiscStore.DeleteBackup(iso);
                 TitleNaming.Log(disc, _destination, $"ISO deleted: {iso}");
-                if (FindJob(disc.Name, _destination) is { } job)
-                    job.HasIso = false;
             }
             disc.Complete = true;
             DiscStore.Save(_destination, disc);
@@ -1316,178 +1192,263 @@ public partial class RipView : UserControl
         UpdatePanelButtons();
     }
 
-    // ── Chip strip ───────────────────────────────────────────────────
-    // One chip per screen + button set with a button that names the selected
-    // title, in the order the screens were found. Which buttons name it is
-    // TitleCoverage.NamingButtons: buttons whose chain plays this title as
-    // its one item, counting MakeMKV's skipped copies (SameAs) as this
-    // title. Two buttons on the same set naming it share one chip and are
-    // both highlighted.
+    // ── Player ───────────────────────────────────────────────────────
 
-    private void TitleList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    // Plays the disc's backup: an .iso for a DVD, a BDMV folder for a
+    // Blu-ray. Whatever was playing is closed first. A disc without a
+    // record or a backup says so in the player panel.
+    private void PlayDisc(RipJob job)
     {
-        Chips.Clear();
+        ClosePlayer();
 
-        if (TitleList.SelectedItem is NamingRow { Title: null })
+        var disc = _records.FirstOrDefault(d => d.Name.Equals(job.Disc, StringComparison.OrdinalIgnoreCase));
+        if (disc == null) return;
+
+        var backup = DiscStore.IsoPath(job.Destination, job.Disc);
+        if (!DiscStore.BackupExists(backup))
         {
-            ShowPlaceholder("No title claims this file, so no menu screen names it.");
-            return;
-        }
-        if (TitleList.SelectedItem is not NamingRow { Title: { } title } || _selectedDisc is null)
-        {
-            ShowPlaceholder(NoTitleSelectedText);
-            return;
-        }
-
-        foreach (var source in TitleCoverage.NamingButtons(_selectedDisc, title))
-        {
-            var existing = Chips.FirstOrDefault(c => c.Matches(source));
-            if (existing != null)
-            {
-                existing.Highlight.Add(source.Button);
-                continue;
-            }
-
-            var screen = _selectedDisc.Screens.FirstOrDefault(s =>
-                s.Ifo == source.Ifo && s.Pgc == source.Pgc && s.Cell == source.Cell);
-            var set = screen?.ButtonSets.FirstOrDefault(b => b.Number == source.ButtonSet);
-
-            Chips.Add(new ScreenChip(source, screen, set));
-        }
-
-        if (Chips.Count == 0)
-        {
-            ShowPlaceholder("No menu screen names this title.");
+            ShowPlayerPlaceholder($"{job.Disc} has no backup to play: {backup} was not found.");
             return;
         }
 
-        // Show the first screen straight away and mark its chip. ShowScreen
-        // is called directly because the chip's RadioButton may not exist
-        // yet; when it is created, its Checked event shows the same screen.
-        Chips[0].IsSelected = true;
-        ShowScreen(Chips[0]);
-    }
-
-    private void Chip_Checked(object sender, RoutedEventArgs e)
-    {
-        if ((sender as FrameworkElement)?.DataContext is ScreenChip chip)
-            ShowScreen(chip);
-    }
-
-    // ── Picture + hotspots ───────────────────────────────────────────
-
-    // Fit Window: no vertical scrolling, so the Viewbox is handed the whole
-    // space and shows the picture whole. Fit Width: vertical scrolling, so
-    // its height is unlimited and it scales to the width alone.
-    private void FitRadio_Checked(object sender, RoutedEventArgs e)
-    {
-        var fit = ReferenceEquals(sender, FitWindowRadio) ? PictureFit.Window : PictureFit.Width;
-        PictureScroll.VerticalScrollBarVisibility =
-            fit == PictureFit.Window ? ScrollBarVisibility.Disabled : ScrollBarVisibility.Auto;
-
-        if (AppSettings.Instance.RipPictureFit == fit) return;
-        AppSettings.Instance.RipPictureFit = fit;
-        AppSettings.Instance.Save();
-    }
-
-    private void ShowScreen(ScreenChip chip)
-    {
-        if (_selectedDisc is null) return;
-
-        // Every gap is shown, never skipped: a record that points at a
-        // screen or picture that isn't there says so in the picture area.
-        if (chip.Screen is null || chip.Set is null)
-        {
-            ShowPlaceholder($"The record names {chip.ToolTip}, but that screen is not in the record.");
-            return;
-        }
-        if (string.IsNullOrEmpty(chip.Screen.Image))
-        {
-            ShowPlaceholder($"No picture was saved for {chip.ToolTip}.");
-            return;
-        }
-
-        var path = System.IO.Path.Combine(
-            DiscStore.DiscFolder(_destination, _selectedDisc.Name), chip.Screen.Image);
-
-        BitmapImage bitmap;
         try
         {
-            // OnLoad reads the file fully and releases it, so the picture
-            // file is never held open while it is shown.
-            bitmap = new BitmapImage();
-            bitmap.BeginInit();
-            bitmap.CacheOption = BitmapCacheOption.OnLoad;
-            bitmap.UriSource   = new Uri(path);
-            bitmap.EndInit();
-            bitmap.Freeze();
+            _player ??= CreatePlayer();
         }
-        catch (Exception ex) when (ex is IOException or NotSupportedException or UriFormatException)
+        catch (Exception ex) when (ex is InvalidOperationException or LibVLCSharp.Shared.VLCException)
         {
-            ShowPlaceholder($"The picture for {chip.ToolTip} could not be read:\n{path}\n{ex.Message}");
+            ShowPlayerPlaceholder($"The player could not start: {ex.Message}");
             return;
         }
 
-        // Size the frame to the picture's own pixels so button rectangles,
-        // which are in those pixels, line up for NTSC and PAL alike. The
-        // Viewbox then scales frame and rectangles together.
-        PictureFrame.Width  = bitmap.PixelWidth;
-        PictureFrame.Height = bitmap.PixelHeight;
-        MenuImage.Source    = bitmap;
+        _playerDisc    = disc;
+        _playerJob     = job;
+        _playerLogPath = PlayerLogPath(disc, job.Destination);
+        WritePlayerLog($"opened {backup}");
 
-        DrawHotspots(chip);
-
-        PicturePlaceholder.Visibility = Visibility.Collapsed;
-        PictureScroll.Visibility      = Visibility.Visible;
-        PictureScroll.ScrollToTop();
+        // The cover goes black and stays up until VLC is playing
+        // (OnPlayerStarted): before then the panel's window is empty. The
+        // frame behind the video goes black too: the panel's native window
+        // paints no background of its own, so the frame shows through
+        // wherever VLC draws nothing (letterbox bands, start-up). Black from
+        // here on matches VLC's own picture, so nothing changes colour.
+        ShowPlayerPlaceholder($"Loading {job.Disc}...");
+        PlayerCover.Background = Brushes.Black;
+        PlayerFrame.Background = Brushes.Black;
+        job.IsPlaying = true;
+        _player.Open(backup);
+        PlayerFrame.Focus();
+        _playerHasKeys = true;
     }
 
-    // Outlines every button in the set and highlights the ones that name
-    // the selected title. The shapes are made in code, so implicit styles
-    // don't reach them; brushes are set as resource references instead,
-    // which also keeps them following a light/dark theme switch.
-    private void DrawHotspots(ScreenChip chip)
+    private DiscPlayer CreatePlayer()
     {
-        HotspotLayer.Children.Clear();
-        if (chip.Set is null) return;
+        var player = new DiscPlayer();
+        player.Message      += (level, text) => WritePlayerLog($"{level,-5} {text}");
+        player.BackOnMenu   += ShowPlayed;
+        player.Failed       += PlayerFailed;
+        player.TitlesListed += OnPlayerStarted;
+        PlayerVideo.MediaPlayer = player.MediaPlayer;
+        return player;
+    }
 
-        foreach (var button in chip.Set.Buttons)
+    // VLC lists the disc's titles once it is playing (DiscPlayer raises
+    // TitlesListed from VLC's Playing event), so this is the point where its
+    // video window exists. VLC opens that window at the video's own size and
+    // only fills the panel when the panel is next resized, which a second
+    // disc in the same panel never gets; until then the panel's window shows
+    // around it. So it is sized to the panel here, then uncovered.
+    private void OnPlayerStarted(int titles)
+    {
+        if (_playerJob == null) return;
+        _playerJob.Tracks = titles;
+        if (_player != null) VideoWindow.FillParent(_player.MediaPlayer.Hwnd);
+        PlayerCover.Visibility = Visibility.Collapsed;
+    }
+
+    // Stops the disc and empties the panel. Safe with nothing playing.
+    private void ClosePlayer()
+    {
+        if (_playerDisc != null) WritePlayerLog("closed");
+        _player?.Close();
+        _playerHasKeys = false;
+        if (_playerJob != null) _playerJob.IsPlaying = false;
+        _playerDisc    = null;
+        _playerJob     = null;
+        _playerLogPath = null;
+        ShowPlayerPlaceholder(NoDiscPlayingText);
+    }
+
+    // The cover and the frame in the panel colour, with a message. PlayDisc
+    // turns both black while a disc is loaded.
+    private void ShowPlayerPlaceholder(string text)
+    {
+        PlayerPlaceholder.Text = text;
+        PlayerCover.SetResourceReference(Border.BackgroundProperty, "PanelBg");
+        PlayerFrame.SetResourceReference(Border.BackgroundProperty, "PanelBg");
+        PlayerCover.Visibility = Visibility.Visible;
+    }
+
+    // player.log in the disc's run log folder, beside info.log and rip.log.
+    // A record from before that folder was recorded gets a new run folder,
+    // kept on the record, as naming.log does.
+    private static string PlayerLogPath(DiscRecord disc, string destination)
+    {
+        if (string.IsNullOrEmpty(disc.RunLogFolder))
         {
-            bool highlight = chip.Highlight.Contains(button.Number);
+            disc.RunLogFolder = System.IO.Path.GetDirectoryName(
+                DiscStore.StageLogPath(destination, DateTime.Now, disc.Name, PlayerLogFileName))!;
+            DiscStore.Save(destination, disc);
+        }
+        Directory.CreateDirectory(disc.RunLogFolder);
+        return System.IO.Path.Combine(disc.RunLogFolder, PlayerLogFileName);
+    }
 
-            var box = new Rectangle
-            {
-                Width           = Math.Max(1, button.X1 - button.X0),
-                Height          = Math.Max(1, button.Y1 - button.Y0),
-                StrokeThickness = highlight ? 3 : 1,
-            };
-            box.SetResourceReference(Shape.StrokeProperty, highlight ? "AccentColor" : "SubtleForeground");
-            Canvas.SetLeft(box, button.X0);
-            Canvas.SetTop(box, button.Y0);
-            HotspotLayer.Children.Add(box);
-
-            var number = new TextBlock
-            {
-                Text       = button.Number.ToString(),
-                FontSize   = 12,
-                FontWeight = highlight ? FontWeights.Bold : FontWeights.Normal,
-                Padding    = new Thickness(3, 0, 3, 0),
-            };
-            number.SetResourceReference(TextBlock.ForegroundProperty, highlight ? "AccentColor" : "ForegroundColor");
-            number.SetResourceReference(TextBlock.BackgroundProperty, "PanelBg");
-            Canvas.SetLeft(number, button.X0);
-            Canvas.SetTop(number, button.Y0);
-            HotspotLayer.Children.Add(number);
+    // The Blu-ray log reader reports from its own thread, hence the lock.
+    private void WritePlayerLog(string line)
+    {
+        lock (_playerLogLock)
+        {
+            if (_playerLogPath == null) return;
+            File.AppendAllText(_playerLogPath, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}  {line}{Environment.NewLine}");
         }
     }
 
-    private void ShowPlaceholder(string text)
+    // Click the player to give it the keys. The click lands on the overlay
+    // VideoView keeps above VLC's own window, so both it and the frame
+    // around it hand focus to the frame.
+    // A click while the player already has the keys does nothing on the
+    // disc (mouse input is off), so it says how to drive it instead.
+    private void Player_MouseDown(object sender, MouseButtonEventArgs e)
     {
-        PictureScroll.Visibility      = Visibility.Collapsed;
-        MenuImage.Source              = null;
-        HotspotLayer.Children.Clear();
-        PicturePlaceholder.Text       = text;
-        PicturePlaceholder.Visibility = Visibility.Visible;
+        Window.GetWindow(this)?.Activate();
+        PlayerFrame.Focus();
+
+        if (_playerDisc == null) return;
+        if (_playerHasKeys)
+            MessageBox.Show(KeyboardOnlyText, "Player", MessageBoxButton.OK, MessageBoxImage.Information);
+        _playerHasKeys = true;
+    }
+
+    // The keys go only when focus lands on another control in the main
+    // window; focus leaving the window (overlay, message box, another app)
+    // keeps them.
+    private void PlayerFrame_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        var inMainWindow = e.NewFocus is DependencyObject target &&
+                           ReferenceEquals(Window.GetWindow(target), Window.GetWindow(this));
+        if (inMainWindow) _playerHasKeys = false;
+    }
+
+    // Arrows and Enter drive the disc's menus. Enter is the only way to
+    // start a title, so it is what marks a pick.
+    private void Player_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (_player == null || _playerDisc == null) return;
+
+        LibVLCSharp.Shared.NavigationMode? mode = e.Key switch
+        {
+            Key.Up    => LibVLCSharp.Shared.NavigationMode.Up,
+            Key.Down  => LibVLCSharp.Shared.NavigationMode.Down,
+            Key.Left  => LibVLCSharp.Shared.NavigationMode.Left,
+            Key.Right => LibVLCSharp.Shared.NavigationMode.Right,
+            Key.Enter => LibVLCSharp.Shared.NavigationMode.Activate,
+            _         => null,
+        };
+        if (mode is null) return;
+
+        _player.Navigate(mode.Value);
+        e.Handled = true;
+    }
+
+    // A pick, once the disc is back on its menu, and what the record has for
+    // it. DVD: each title played, by number. Blu-ray: the pick's playlist,
+    // and when the start was ambiguous each candidate, each with the title
+    // MakeMKV built from it or "not listed by MakeMKV". When that comes to
+    // exactly one row, the row is selected (the kept title's row for a copy
+    // MakeMKV skipped); the keys stay with the player.
+    private void ShowPlayed(PickResult result)
+    {
+        if (_playerDisc is not { } disc) return;
+
+        List<string> lines;
+        List<TitleRecord> matches;
+        if (result.DiscType == DiscType.BluRay)
+        {
+            var playlists = result.Start is { Candidates.Count: > 1 } start
+                ? start.Candidates.Select(c => c.Playlist).ToList()
+                : result.Playlist is { } playlist ? new List<string> { playlist } : new List<string>();
+            var found = playlists.Select(p => (Playlist: p, Title: TitleForPlaylist(disc, p))).ToList();
+            lines = found.Select(f => $"Playlist {f.Playlist}  \u2192  " +
+                                      (f.Title is { } t ? $"title {t.Number}  {t.Duration}" : "not listed by MakeMKV"))
+                         .ToList();
+            if (playlists.Count > 1) lines.Insert(0, "Ambiguous start:");
+            matches = found.Where(f => f.Title != null).Select(f => f.Title!).ToList();
+        }
+        else
+        {
+            lines = result.Played
+                .Select(p => $"Title {p.Number}  {p.Length:hh\\:mm\\:ss}  \u2192  {Describe(disc, p.Number)}")
+                .ToList();
+            matches = result.Played.Count == 1 && RowTitle(disc, result.Played[0].Number) is { } only
+                ? new List<TitleRecord> { only }
+                : new List<TitleRecord>();
+        }
+
+        if (matches.Count == 1 && ReferenceEquals(_selectedDisc, disc) &&
+            TitleRows.FirstOrDefault(r => r.Title == matches[0]) is { } row)
+        {
+            TitleList.SelectedItem = row;
+            TitleList.ScrollIntoView(row);
+        }
+
+        var text = string.Join(Environment.NewLine, lines);
+        WritePlayerLog($"Played:{Environment.NewLine}{text}");
+        MessageBox.Show(text, "Played");
+    }
+
+    // The title MakeMKV built from a Blu-ray playlist ("00800", as the
+    // player names it), or null.
+    private static TitleRecord? TitleForPlaylist(DiscRecord disc, string playlist) =>
+        disc.Titles.FirstOrDefault(t => string.Equals(t.Playlist, playlist + ".mpls", StringComparison.OrdinalIgnoreCase));
+
+    // The title whose row a DVD title number lands on: its own, or the kept
+    // title's for a copy MakeMKV skipped. Null when it has no row.
+    private static TitleRecord? RowTitle(DiscRecord disc, int number)
+    {
+        var title = disc.Titles.FirstOrDefault(t => t.Number == number);
+        if (title?.SameAs is int kept)
+            title = disc.Titles.FirstOrDefault(t => t.Number == kept);
+        return title is { RipName: not null } ? title : null;
+    }
+
+    // A DVD title number as the record has it: its name or MakeMKV's name,
+    // or why there is none.
+    private static string Describe(DiscRecord disc, int number)
+    {
+        var title = disc.Titles.FirstOrDefault(t => t.Number == number);
+        if (title == null)
+            return "not in the disc's title table";
+        var prefix = "";
+        if (title.SameAs is int kept)
+        {
+            prefix = $"same as title {kept}: ";
+            title  = disc.Titles.FirstOrDefault(t => t.Number == kept);
+            if (title == null) return prefix + "not in the disc's title table";
+        }
+        if (title.RipName == null)
+            return prefix + "MakeMKV didn't list it";
+        return prefix + (title.Name.Length > 0 ? $"\"{title.Name}\"" : title.RipName);
+    }
+
+    // Pick tracking stopped: the disc's row turns red with the error, as
+    // any other failure in the jobs list does.
+    private void PlayerFailed(Exception ex)
+    {
+        WritePlayerLog($"failed: {ex}");
+        if (_playerJob is not { } job) return;
+        job.Status  = $"Player: {ex.Message}";
+        job.IsError = true;
     }
 }
 
@@ -1633,6 +1594,10 @@ public sealed class OpticalDriveRow : INotifyPropertyChanged
 
     public bool HasRowBrush => RowBrush != null;
 
+    // The backup's progress as text, in its own column, so it shows while
+    // the green fill is behind the row's button. Empty when not backing up.
+    public string Percent => State == DriveState.BackingUp ? $"{Progress:P0}" : "";
+
     // A hard edge at the progress point: the fill colour to the left,
     // clear to the right.
     private static Brush ProgressBrush(double fraction)
@@ -1654,6 +1619,7 @@ public sealed class OpticalDriveRow : INotifyPropertyChanged
         OnPropertyChanged(nameof(ButtonHint));
         OnPropertyChanged(nameof(RowBrush));
         OnPropertyChanged(nameof(HasRowBrush));
+        OnPropertyChanged(nameof(Percent));
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -1695,45 +1661,38 @@ internal static class OpticalDrive
     }
 }
 
-// One chip in the strip above the picture: a screen and one of its
-// button sets, plus the buttons on it that name the selected title.
-public sealed class ScreenChip : INotifyPropertyChanged
+// Sizes the windows VLC puts inside the player's panel window to fill it.
+// VLC lays out its video inside its own window whenever that window is
+// resized, so sizing it is enough.
+internal static class VideoWindow
 {
-    public NamedBySource    Source { get; }
-    public ScreenRecord?    Screen { get; }
-    public ButtonSetRecord? Set    { get; }
-    public HashSet<int>     Highlight { get; } = new();
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Rect { public int Left, Top, Right, Bottom; }
 
-    public string Label   { get; }
-    public string ToolTip { get; }
+    private delegate bool EnumProc(IntPtr hwnd, IntPtr lParam);
 
-    public ScreenChip(NamedBySource source, ScreenRecord? screen, ButtonSetRecord? set)
+    private const uint SwpNoZOrder   = 0x0004;
+    private const uint SwpNoActivate = 0x0010;
+
+    [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr hwnd, out Rect rect);
+    [DllImport("user32.dll")] private static extern IntPtr GetParent(IntPtr hwnd);
+    [DllImport("user32.dll")] private static extern bool EnumChildWindows(IntPtr parent, EnumProc proc, IntPtr lParam);
+    [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+
+    // `panel` is the window handle VLC was given. Only its direct children
+    // are sized; VLC places the windows inside those itself.
+    public static void FillParent(IntPtr panel)
     {
-        Source = source;
-        Screen = screen;
-        Set    = set;
-        Highlight.Add(source.Button);
+        if (panel == IntPtr.Zero || !GetClientRect(panel, out var client)) return;
 
-        var ifo = System.IO.Path.GetFileNameWithoutExtension(source.Ifo);
-        Label   = source.ButtonSet > 1 ? $"{ifo} pgc {source.Pgc} set {source.ButtonSet}"
-                                       : $"{ifo} pgc {source.Pgc}";
-        ToolTip = $"{source.Ifo} pgc {source.Pgc} cell {source.Cell} button set {source.ButtonSet}";
+        var children = new List<IntPtr>();
+        EnumChildWindows(panel, (hwnd, _) =>
+        {
+            if (GetParent(hwnd) == panel) children.Add(hwnd);
+            return true;
+        }, IntPtr.Zero);
+
+        foreach (var child in children)
+            SetWindowPos(child, IntPtr.Zero, 0, 0, client.Right, client.Bottom, SwpNoZOrder | SwpNoActivate);
     }
-
-    public bool Matches(NamedBySource other) =>
-        Source.Ifo == other.Ifo && Source.Pgc == other.Pgc &&
-        Source.Cell == other.Cell && Source.ButtonSet == other.ButtonSet;
-
-    // Bound two-way to the chip's RadioButton, so the code can select a
-    // chip and the strip shows it as checked.
-    private bool _isSelected;
-    public bool IsSelected
-    {
-        get => _isSelected;
-        set { if (_isSelected == value) return; _isSelected = value; OnPropertyChanged(); }
-    }
-
-    public event PropertyChangedEventHandler? PropertyChanged;
-    private void OnPropertyChanged([CallerMemberName] string? name = null) =>
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }

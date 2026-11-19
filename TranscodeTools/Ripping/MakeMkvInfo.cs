@@ -1,42 +1,52 @@
 // ============================================================
 // MakeMkvInfo.cs
 // ------------------------------------------------------------
-// The info stage (port seam 5): `makemkvcon -r --noscan --minlength=0 info
-// iso:<ISO>` run against the backup ISO, logged to
+// The info stage: `makemkvcon -r --noscan --minlength=0 info <source>`
+// run against the backup, logged to
 // <Destination>\Logs\<timestamp>\<DISC>\info.log, and its TINFO
-// lines read into the disc's titles.
+// lines read into the disc's titles. The source is `iso:<file>` for
+// a DVD's image and `file:<folder>` for a Blu-ray's BDMV folder.
 //
 // TINFO:row,field,code,"value" -- one line per field of each title
-// MakeMKV lists. The fields used:
-//    8  chapter count (the chapter gate: TT_SRPT's count or one fewer)
+// MakeMKV lists. The row is MakeMKV's own title number, the one its
+// `mkv` command takes. The fields used:
+//    8  chapter count (the chapter check)
 //    9  duration, "h:mm:ss"
-//   11  the title's size on the disc, in bytes (the binder's size
-//       guard; the ripped file comes out at 0.978-0.981 of it)
-//   24  the DVD title number it comes from (the join to TT_SRPT)
+//   11  the title's size on the disc, in bytes (the rip's size guard;
+//       a DVD rip comes out at 0.978-0.981 of it)
+//   16  the source it was built from: a playlist ("00800.mpls") or a
+//       loose clip ("50201.m2ts"); the Blu-ray key
+//   24  the DVD title number it comes from (the DVD key)
 //   26  the cell segments it covers, e.g. "1-5,6-9" (play-all check)
-//   27  the file name the rip will be written under (the binder's key)
+//   27  the file name its rip will be written under
 //
-// MSG:3027 lines name the titles MakeMKV skipped as copies of another:
-// "Title #36 in VTS 10 is equal to title #35 and was skipped", with the
-// title set, the kept title and the skipped title as its parameters. A
-// skipped title has no TINFO row; it gets SameAs set to the kept title,
-// so the buttons that name it can be shown on the kept title's file.
+// DVD: the record already holds the title table from the IFO; each
+// row is joined to its title by field 24, never by row number
+// (--minlength can drop rows). MSG:3027 lines name the titles MakeMKV
+// skipped as copies of another ("Title #36 in VTS 10 is equal to title
+// #35 and was skipped"): a skipped title has no row and gets SameAs.
+// The chapter check: MakeMKV drops the trailing menu-jump cell, so its
+// count is the title table's or one fewer.
 //
-// Rows are joined to the disc's titles by field 24, never by row
-// number: --minlength can drop rows and shift the numbering. A title
-// MakeMKV does not list, or a row naming a title the disc does not
-// have, is written to the log and reported; nothing is guessed.
+// Blu-ray: there is no title table, so the titles are made from the
+// rows, one per row, keyed by field 16. The chapter check runs
+// mkvmerge on each row's playlist (PlaylistChapters): MakeMKV's count
+// must equal mkvmerge's or be exactly one higher. MakeMKV adds a
+// chapter at the very end of a title (a known MakeMKV behaviour; see
+// Known Issues in the reference doc); measured 2026-11-18, every
+// mismatch on five Blu-rays was MakeMKV one higher, never any other
+// difference. A row built from a loose clip has no playlist to check
+// against, so it stays unverified, with the reason in its note and the
+// log.
 //
-// Once joined, each title gets the oracle's two checks (join_titles):
-//   - the chapter gate: MakeMKV drops the trailing menu-jump cell, so
-//     its count is TT_SRPT's or one fewer. Anything else means the row
-//     is not this title, and Verified stays false so it is never bound.
-//   - play-all: a title made of several segment ranges whose runtime is
-//     the sum of 2-4 other titles (within 2 s) is flagged, not hidden.
+// A title that fails its check stays Verified = false and is never
+// bound to a file. Every title or row that could not be joined is
+// written to the log and reported; nothing is guessed. Then a title
+// made of several segment ranges whose runtime is the sum of 2-4
+// other titles (within 2 s) is flagged as a play-all, not hidden.
 //
-// The ISO is read by MakeMKV directly (iso:), so it is not mounted.
 // --noscan keeps MakeMKV off the optical drives: without it makemkvcon
-// probes every drive at startup even when reading an ISO.
+// probes every drive at startup even when reading a backup.
 // ============================================================
 
 using System.IO;
@@ -46,8 +56,8 @@ namespace TranscodeTools;
 
 public static class MakeMkvInfo
 {
-    // The rip stage must pass the same value: MakeMKV numbers its titles,
-    // and so names its files, after this filter has run.
+    // The rip must pass the same value: MakeMKV numbers its titles, and so
+    // names its files, after this filter has run.
     public const int MinLength = 0;
 
     public const string LogFileName = "info.log";
@@ -56,10 +66,14 @@ public static class MakeMkvInfo
 
     private const string SkippedAsEqualMessage = "3027";
 
-    // One title as MakeMKV lists it.
+    private const string PlaylistExtension = ".mpls";
+
+    // One title as MakeMKV lists it. SourceTitle is field 24, which only
+    // a DVD's rows carry.
     public sealed record InfoTitle(
         int    Row,
-        int    SourceTitle,
+        int?   SourceTitle,
+        string Source,
         int    Chapters,
         string Duration,
         int    Seconds,
@@ -67,13 +81,15 @@ public static class MakeMkvInfo
         string Segments,
         string RipName);
 
-    // Runs the info stage for the ISO and fills each of the record's
-    // titles from it. Throws MakeMkvException on failure,
+    // Runs the info stage on the backup and fills the record's titles from
+    // it: the DVD title table's titles, or for a Blu-ray new titles from
+    // MakeMKV's rows. Throws MakeMkvException on failure,
     // OperationCanceledException on cancel. Anything that could not be
-    // joined is reported through `progress` and the log.
+    // joined or checked is reported through `progress` and the log.
     public static async Task RunAsync(
         string makeMkvPath,
-        string isoPath,
+        string mkvMergePath,
+        string backupPath,
         string logPath,
         DiscRecord record,
         IProgress<string> progress,
@@ -83,15 +99,16 @@ public static class MakeMkvInfo
 
         await using var log = new StreamWriter(logPath, append: false, Encoding.UTF8) { AutoFlush = true };
         log.WriteLine("TranscodeTools Info Log");
-        log.WriteLine($"Run:  {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-        log.WriteLine($"Disc: {record.Name}");
-        log.WriteLine($"ISO:  {isoPath}");
+        log.WriteLine($"Run:    {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        log.WriteLine($"Disc:   {record.Name}");
+        log.WriteLine($"Backup: {backupPath}");
         log.WriteLine(new string('-', 60));
         log.WriteLine();
 
         try
         {
-            var args = new[] { "-r", "--noscan", $"--minlength={MinLength}", "info", $"iso:{isoPath}" };
+            var source = record.BluRay ? $"file:{backupPath}" : $"iso:{backupPath}";
+            var args   = new[] { "-r", "--noscan", $"--minlength={MinLength}", "info", source };
             var result = await MakeMkv.RunAsync(makeMkvPath, args, log, progress: null, token);
 
             if (result.ExitCode != 0)
@@ -102,8 +119,18 @@ public static class MakeMkvInfo
                 throw new MakeMkvException("MakeMKV listed no titles.");
 
             var problems = new List<string>();
-            var skipped  = ParseSkipped(result.Lines, problems);
-            problems.AddRange(Apply(record, titles, skipped));
+            if (record.BluRay)
+            {
+                log.WriteLine();
+                log.WriteLine("Chapter check (mkvmerge)");
+                problems.AddRange(await ApplyBluRayAsync(record, titles, mkvMergePath, backupPath, log, progress, token));
+            }
+            else
+            {
+                var skipped = ParseSkipped(result.Lines, problems);
+                problems.AddRange(ApplyDvd(record, titles, skipped));
+            }
+            FlagPlayAll(record);
 
             log.WriteLine();
             foreach (var problem in problems)
@@ -112,7 +139,8 @@ public static class MakeMkvInfo
                 progress.Report($"skipped: {problem}");
             }
             log.WriteLine($"Info complete: {titles.Count} title(s) listed, " +
-                          $"{record.Titles.Count(t => t.RipName != null)} of {record.Titles.Count} joined");
+                          $"{record.Titles.Count(t => t.RipName != null)} joined, " +
+                          $"{record.Titles.Count(t => t.Verified)} passed the chapter check");
         }
         catch (OperationCanceledException)
         {
@@ -128,9 +156,7 @@ public static class MakeMkvInfo
         }
     }
 
-    // Reads the TINFO lines into one entry per row. A row whose field 24
-    // is not a number names no DVD title and is left out, as the oracle
-    // does.
+    // Reads the TINFO lines into one entry per row.
     public static List<InfoTitle> Parse(IEnumerable<string> lines)
     {
         var rows = new SortedDictionary<int, Dictionary<int, string>>();
@@ -148,23 +174,20 @@ public static class MakeMkvInfo
             values[id] = fields[3];
         }
 
-        var titles = new List<InfoTitle>();
-        foreach (var (row, values) in rows)
+        return rows.Select(r =>
         {
-            if (!int.TryParse(Get(values, 24).Trim(), out var source)) continue;
-
-            var duration = Get(values, 9);
-            titles.Add(new InfoTitle(
-                Row:         row,
-                SourceTitle: source,
-                Chapters:    int.TryParse(Get(values, 8), out var chapters) ? chapters : 0,
+            var duration = Get(r.Value, 9);
+            return new InfoTitle(
+                Row:         r.Key,
+                SourceTitle: int.TryParse(Get(r.Value, 24).Trim(), out var source) ? source : null,
+                Source:      Get(r.Value, 16),
+                Chapters:    int.TryParse(Get(r.Value, 8), out var chapters) ? chapters : 0,
                 Duration:    duration,
                 Seconds:     Seconds(duration),
-                SourceBytes: Bytes(Get(values, 11)),
-                Segments:    Get(values, 26),
-                RipName:     Get(values, 27)));
-        }
-        return titles;
+                SourceBytes: Bytes(Get(r.Value, 11)),
+                Segments:    Get(r.Value, 26),
+                RipName:     Get(r.Value, 27));
+        }).ToList();
     }
 
     // Reads the MSG:3027 lines into skipped title -> the title MakeMKV kept
@@ -191,17 +214,24 @@ public static class MakeMkvInfo
         return skipped;
     }
 
-    // Fills each record title from the row for its title number, then
-    // runs the chapter gate and the play-all check. A title MakeMKV skipped
-    // as a copy gets SameAs instead of a row. Returns a line for every
-    // title or row that could not be joined, and every skipped title.
-    private static List<string> Apply(DiscRecord record, List<InfoTitle> titles, Dictionary<int, int> skipped)
+    // DVD: fills each title-table title from the row for its title number
+    // and runs the chapter check. A title MakeMKV skipped as a copy gets
+    // SameAs instead of a row. Returns a line for every title or row that
+    // could not be joined, and every skipped title.
+    private static List<string> ApplyDvd(DiscRecord record, List<InfoTitle> titles, Dictionary<int, int> skipped)
     {
         var problems = new List<string>();
         var bySource = new Dictionary<int, InfoTitle>();
         foreach (var info in titles)
-            if (!bySource.TryAdd(info.SourceTitle, info))
-                throw new MakeMkvException($"MakeMKV lists title {info.SourceTitle} more than once.");
+        {
+            if (info.SourceTitle is not int number)
+            {
+                problems.Add($"MakeMKV row {info.Row} names no DVD title");
+                continue;
+            }
+            if (!bySource.TryAdd(number, info))
+                throw new MakeMkvException($"MakeMKV lists title {number} more than once.");
+        }
 
         foreach (var title in record.Titles)
         {
@@ -220,22 +250,15 @@ public static class MakeMkvInfo
                 continue;
             }
 
-            title.Duration    = info.Duration;
-            title.Seconds     = info.Seconds;
-            title.SourceBytes = info.SourceBytes;
-            title.Segments    = info.Segments;
-            title.RipName     = info.RipName;
-            title.Verified    = info.Chapters == title.Chapters || info.Chapters == title.Chapters - 1;
+            Fill(title, info);
+            title.Verified = info.Chapters == title.Chapters || info.Chapters == title.Chapters - 1;
             if (!title.Verified)
                 title.Note = $"chapter mismatch: disc says {title.Chapters}, MakeMKV says {info.Chapters}";
         }
 
-        FlagPlayAll(record);
-
         var known = record.Titles.Select(t => t.Number).ToHashSet();
-        foreach (var info in titles.Where(t => !known.Contains(t.SourceTitle)))
-            problems.Add($"MakeMKV row {info.Row} comes from title {info.SourceTitle}, " +
-                         "which is not in the disc's title table");
+        foreach (var (number, info) in bySource.Where(s => !known.Contains(s.Key)))
+            problems.Add($"MakeMKV row {info.Row} comes from title {number}, which is not in the disc's title table");
         foreach (var (copy, kept) in skipped.Where(s => !known.Contains(s.Key)))
             problems.Add($"MakeMKV says it skipped title {copy} as the same as title {kept}, " +
                          "but that title is not in the disc's title table");
@@ -243,6 +266,60 @@ public static class MakeMkvInfo
             problems.Add($"MakeMKV says it skipped title {copy}, but it also lists a row for it; the row is used");
 
         return problems;
+    }
+
+    // Blu-ray: one title per row, then the chapter check against mkvmerge's
+    // count for the row's playlist. Each check is written to the log.
+    private static async Task<List<string>> ApplyBluRayAsync(
+        DiscRecord record, List<InfoTitle> titles, string mkvMergePath, string backupPath,
+        StreamWriter log, IProgress<string> progress, CancellationToken token)
+    {
+        var problems = new List<string>();
+        record.Titles = titles.Select(info =>
+        {
+            var title = new TitleRecord { Number = info.Row + 1 };
+            Fill(title, info);
+            return title;
+        }).ToList();
+
+        foreach (var (title, info) in record.Titles.Zip(titles))
+        {
+            token.ThrowIfCancellationRequested();
+
+            if (!info.Source.EndsWith(PlaylistExtension, StringComparison.OrdinalIgnoreCase))
+            {
+                title.Note = info.Source.Length == 0
+                    ? "MakeMKV named no source for it, so its chapters could not be checked"
+                    : $"built from clip {info.Source}, with no playlist to check its chapters against";
+                problems.Add($"title {title.Number}: {title.Note}");
+                continue;
+            }
+
+            progress.Report($"checking chapters of {info.Source}");
+            var mpls = Path.Combine(backupPath, "BDMV", "PLAYLIST", info.Source);
+            title.Chapters = await PlaylistChapters.ReadAsync(mkvMergePath, mpls, token);
+            // MakeMKV's extra end chapter: one higher is the same title.
+            title.Verified = info.Chapters == title.Chapters || info.Chapters == title.Chapters + 1;
+            log.WriteLine($"title {title.Number} {info.Source}: MakeMKV {info.Chapters}, mkvmerge {title.Chapters}" +
+                          (!title.Verified                      ? " - MISMATCH"
+                           : info.Chapters == title.Chapters + 1 ? " (MakeMKV's extra end chapter)"
+                           :                                       ""));
+            if (!title.Verified)
+                title.Note = $"chapter mismatch: {info.Source} has {title.Chapters}, MakeMKV says {info.Chapters}";
+        }
+        return problems;
+    }
+
+    // What every row adds to its title, on either kind of disc.
+    private static void Fill(TitleRecord title, InfoTitle info)
+    {
+        title.MakeMkvTitle = info.Row;
+        title.Playlist     = info.Source.Length > 0 ? info.Source : null;
+        title.Duration     = info.Duration;
+        title.Seconds      = info.Seconds;
+        title.SourceBytes  = info.SourceBytes;
+        title.Segments     = info.Segments;
+        title.RipName      = info.RipName;
     }
 
     // A title with several segment ranges whose runtime equals the sum of
@@ -263,7 +340,8 @@ public static class MakeMkvInfo
 
                 title.CompositeOf    = combo.Select(t => t.Number).OrderBy(n => n).ToList();
                 title.Flags.PlayAll  = true;
-                title.Note = $"play-all: same runtime as titles {string.Join("+", title.CompositeOf)}";
+                var playAll = $"play-all: same runtime as titles {string.Join("+", title.CompositeOf)}";
+                title.Note = title.Note.Length == 0 ? playAll : $"{playAll}; {title.Note}";
             }
         }
     }

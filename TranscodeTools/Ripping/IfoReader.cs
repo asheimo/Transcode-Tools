@@ -1,21 +1,15 @@
 // ============================================================
 // IfoReader.cs
 // ------------------------------------------------------------
-// The I/O half of seam 1: find a disc's VIDEO_TS folder, list its
-// IFO files in the order they should be read, and read one.
+// The I/O half of the DVD title read: find a disc's VIDEO_TS folder
+// and read its VIDEO_TS.IFO, the file holding the title table (Ifo).
 //
 // IFO files are read whole through the filesystem. CSS scrambles
-// VOB payload, not IFOs, so everything here works straight off an
-// optical drive with no backup and no decryption.
-//
-// The sector reader for VOB payload is NOT here: its only caller
-// is the NAV pack scan that reads button data, which is seam 2.
-// Staging menu VOBs to local disk is likewise seam 4's, where
-// frame extraction needs it.
+// VOB payload, not IFOs, so this works on a mounted backup with no
+// decryption.
 // ============================================================
 
 using System.IO;
-using System.Text.RegularExpressions;
 
 namespace TranscodeTools;
 
@@ -29,10 +23,6 @@ public sealed class DiscSourceException : Exception
 
 public static class IfoReader
 {
-    // VIDEO_TS.IFO is the VMG; VTS_nn_0.IFO is a title set's.
-    private static readonly Regex IfoName =
-        new(@"^(VIDEO_TS|VTS_\d\d_0)\.IFO$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
     public const string VideoTsFolderName = "VIDEO_TS";
     public const string VmgFileName       = "VIDEO_TS.IFO";
 
@@ -58,43 +48,18 @@ public static class IfoReader
         throw new DiscSourceException($"No {VideoTsFolderName} folder on {sourcePath}. Is this a DVD?");
     }
 
-    // VMG first, then the title sets in name order -- the VMG carries the
-    // title table every later IFO's titles are numbered against.
-    public static IReadOnlyList<string> ListIfoFiles(string videoTs)
+    // The bytes of the VIDEO_TS.IFO in `videoTs`.
+    public static byte[] ReadVmg(string videoTs)
     {
-        string[] files;
-        try
-        {
-            files = Directory.GetFiles(videoTs);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            throw new DiscSourceException($"{videoTs} could not be listed: {ex.Message}");
-        }
-
-        var ifos = files
-            .Where(f => IfoName.IsMatch(Path.GetFileName(f)))
-            .OrderBy(f => !string.Equals(Path.GetFileName(f), VmgFileName, StringComparison.OrdinalIgnoreCase))
-            .ThenBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        if (ifos.Count == 0)
-            throw new DiscSourceException($"No IFO files in {videoTs}.");
-
-        return ifos;
-    }
-
-    // A single unreadable IFO is reported and skipped by the caller, so
-    // the read failure is surfaced as an exception with the file named.
-    public static byte[] ReadIfo(string path)
-    {
+        var path = FindCaseInsensitive(videoTs, VmgFileName, directories: false)
+            ?? throw new DiscSourceException($"No {VmgFileName} in {videoTs}.");
         try
         {
             return File.ReadAllBytes(path);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            throw new DiscSourceException($"{Path.GetFileName(path)} could not be read: {ex.Message}");
+            throw new DiscSourceException($"{VmgFileName} could not be read: {ex.Message}");
         }
     }
 
